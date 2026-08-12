@@ -1,0 +1,70 @@
+import { NextRequest, NextResponse } from "next/server";
+
+export const runtime = "nodejs";
+
+interface TtsRequestBody {
+  text: string;
+}
+
+export async function POST(req: NextRequest) {
+  let body: TtsRequestBody;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const text = body?.text;
+  if (!text || typeof text !== "string" || !text.trim()) {
+    return NextResponse.json({ error: "Missing text" }, { status: 400 });
+  }
+
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  const voiceId = process.env.ELEVENLABS_VOICE_ID;
+  if (!apiKey || !voiceId) {
+    return NextResponse.json(
+      { error: "Server is missing ELEVENLABS_API_KEY or ELEVENLABS_VOICE_ID" },
+      { status: 500 }
+    );
+  }
+
+  let elevenRes: Response;
+  try {
+    elevenRes = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      method: "POST",
+      headers: {
+        "xi-api-key": apiKey,
+        "Content-Type": "application/json",
+        Accept: "audio/mpeg",
+      },
+      body: JSON.stringify({
+        text: text.trim(),
+        model_id: "eleven_turbo_v2_5",
+      }),
+    });
+  } catch {
+    return NextResponse.json(
+      { error: "Unable to reach ElevenLabs' API" },
+      { status: 502 }
+    );
+  }
+
+  if (!elevenRes.ok || !elevenRes.body) {
+    const detail = await elevenRes.text().catch(() => "");
+    console.error(
+      `ElevenLabs TTS request failed: status=${elevenRes.status} body=${detail}`
+    );
+    return NextResponse.json(
+      { error: "Speech synthesis failed", detail },
+      { status: elevenRes.status || 502 }
+    );
+  }
+
+  return new Response(elevenRes.body, {
+    status: 200,
+    headers: {
+      "Content-Type": "audio/mpeg",
+      "Cache-Control": "no-store",
+    },
+  });
+}
