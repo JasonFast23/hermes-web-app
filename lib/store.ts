@@ -41,6 +41,10 @@ interface ChatState {
   activeSessionId: string | null;
   sessions: ChatSession[];
   isStreaming: boolean;
+  // The in-flight request's controller, if any — lets stopStreaming() cancel
+  // whatever's currently running (including mid-delegation) from the UI.
+  // Never persisted; it's only meaningful for the live session.
+  activeAbortController: AbortController | null;
   error: string | null;
   sidebarCollapsed: boolean;
   view: "chat" | "sessions";
@@ -65,17 +69,26 @@ interface ChatState {
   askEva: (message: string, onToolEvent?: (event: ToolProgressPayload) => void) => Promise<string>;
   toggleSidebar: () => void;
   setVoiceVolume: (volume: number) => void;
+  stopStreaming: () => void;
 }
 
-// Eva (and now Email/Research) emit a line like "[[DELEGATE:email]] draft a
-// reply to..." when they want to hand a task to another profile. Maps the
-// marker keyword to the internal AgentId (the Research tab's id is
-// "graphic", not "research").
+// Only Eva (jarvis) ever emits a line like "[[DELEGATE:email]] draft a
+// reply to..." — she's the sole orchestrator; the subagents she delegates
+// to (Email/Research/Case File) are pure specialists that report straight
+// back rather than delegating onward themselves. Maps the marker keyword
+// to the internal AgentId (the Research tab's id is "graphic", not
+// "research"; Case File's is "rag").
 const DELEGATE_TARGETS: Record<string, AgentId> = {
   email: "email",
   research: "graphic",
+  casefile: "rag",
 };
-const DELEGATE_MARKER = /^\[\[DELEGATE:(email|research)\]\][ \t]*(.*)$/m;
+const DELEGATE_MARKER = /^\[\[DELEGATE:(email|research|casefile)\]\][ \t]*(.*)$/m;
+
+// Caps how many delegate -> Eva-reacts -> delegate-again cycles a single
+// turn can chain through, so a model that keeps re-delegating can't loop
+// forever.
+const MAX_DELEGATION_HOPS = 5;
 
 function createSession(): ChatSession {
   return {
@@ -90,6 +103,10 @@ function deriveTitle(text: string): string {
   const trimmed = text.trim().replace(/\s+/g, " ");
   if (!trimmed) return "New session";
   return trimmed.length > 40 ? trimmed.slice(0, 40) + "…" : trimmed;
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "AbortError";
 }
 
 function extractDelta(json: unknown): string {
@@ -125,7 +142,8 @@ async function streamChatCompletion(
   sessionKey: string,
   history: HistoryMessage[],
   onDelta: (chunk: string) => void,
-  onToolEvent?: (event: ToolProgressPayload) => void
+  onToolEvent?: (event: ToolProgressPayload) => void,
+  signal?: AbortSignal
 ): Promise<string> {
   let fullText = "";
 
@@ -137,6 +155,7 @@ async function streamChatCompletion(
       agentId,
       sessionKey,
     }),
+    signal,
   });
 
   if (!res.ok || !res.body) {
@@ -312,11 +331,120 @@ export const useChatStore = create<ChatState>()(
         }));
       };
 
+      // Shared by sendMessage/askEva/runEvaAfterDelegation: checks an
+      // agent's just-streamed reply for a [[DELEGATE:x]] marker, strips it
+      // from the displayed message, runs the subagent, then — since
+      // subagents never delegate onward themselves — gives Eva a real
+      // follow-up turn so she actually sees the report and can decide what
+      // happens next, including delegating again. Returns the final text
+      // to show/speak once nothing more is being delegated.
+      const processDelegateMarker = async (
+        sessionId: string,
+        agentId: AgentId,
+        messageId: string,
+        fullText: string,
+        onToolEvent: ((event: ToolProgressPayload) => void) | undefined,
+        hopsLeft: number
+      ): Promise<string> => {
+        const match = DELEGATE_MARKER.exec(fullText);
+        if (!match || hopsLeft <= 0) return fullText.trim();
+
+        const target = DELEGATE_TARGETS[match[1]];
+        const task = match[2].trim();
+        if (!target || !task || target === agentId) return fullText.trim();
+
+        set((s) => ({
+          sessions: s.sessions.map((sess) =>
+            sess.id === sessionId
+              ? {
+                  ...sess,
+                  threads: {
+                    ...sess.threads,
+                    [agentId]: (sess.threads[agentId] ?? []).map((m) =>
+                      m.id === messageId
+                        ? { ...m, content: m.content.replace(DELEGATE_MARKER, "").replace(/^\s+/, "") }
+                        : m
+                    ),
+                  },
+                }
+              : sess
+          ),
+        }));
+
+        await get().delegateToAgent(sessionId, agentId, target, task, onToolEvent);
+        return runEvaAfterDelegation(sessionId, onToolEvent, hopsLeft);
+      };
+
+      // Gives Eva (jarvis) a fresh turn after a subagent reports back, with
+      // that report already sitting in her thread as context — a plain
+      // nudge (never shown/persisted, matching how the system prompt
+      // itself is invisible) is all that's needed to prompt her actual
+      // reaction, since the chat API needs a trailing user-role turn.
+      // Recurses through processDelegateMarker (bounded by hopsLeft) so a
+      // chain like research -> report -> Eva delegates email keeps working
+      // even though the subagents themselves can no longer chain directly.
+      const runEvaAfterDelegation = async (
+        sessionId: string,
+        onToolEvent: ((event: ToolProgressPayload) => void) | undefined,
+        hopsLeft: number
+      ): Promise<string> => {
+        const session = get().sessions.find((s) => s.id === sessionId);
+        const jarvisThread = session?.threads.jarvis ?? [];
+
+        const assistantMessage: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: "" };
+        appendMessages(sessionId, "jarvis", [assistantMessage]);
+        set({ activeAgentId: "jarvis", view: "chat" });
+
+        const appendToAssistant = (chunk: string) => appendToMessage(sessionId, "jarvis", assistantMessage.id, chunk);
+        const handleToolEvent = (event: ToolProgressPayload) => {
+          updateToolEvent(sessionId, "jarvis", assistantMessage.id, event);
+          onToolEvent?.(event);
+        };
+
+        const history = [
+          ...toHistory(jarvisThread),
+          {
+            role: "user" as const,
+            content:
+              "Continue based on the report above — decide what to do next, " +
+              "delegating again if needed, then respond to the user.",
+          },
+        ];
+
+        const controller = new AbortController();
+        set({ activeAbortController: controller });
+
+        let fullText: string;
+        try {
+          fullText = await streamChatCompletion(
+            "jarvis",
+            sessionId,
+            history,
+            appendToAssistant,
+            handleToolEvent,
+            controller.signal
+          );
+        } catch (err) {
+          if (isAbortError(err)) {
+            appendToAssistant("\n\n_Stopped._");
+            return "Stopped.";
+          }
+          const detail = err instanceof Error ? err.message : "Request failed";
+          appendToAssistant(`\n\n⚠️ ${detail}`);
+          return `Sorry, I hit an error: ${detail}`;
+        } finally {
+          set({ activeAbortController: null });
+        }
+
+        return processDelegateMarker(sessionId, "jarvis", assistantMessage.id, fullText, onToolEvent, hopsLeft - 1);
+      };
+
       return {
         activeAgentId: DEFAULT_AGENT_ID,
         activeSessionId: null,
         sessions: [],
         isStreaming: false,
+        activeAbortController: null,
         error: null,
         sidebarCollapsed: false,
         view: "chat",
@@ -356,6 +484,16 @@ export const useChatStore = create<ChatState>()(
 
         toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 
+        // Cancels whatever request is currently in flight — including a
+        // delegated hand-off, since only one streamChatCompletion call is
+        // ever active at a time and each one registers itself here right
+        // before it starts. The fetch's AbortSignal tears down both the
+        // request and the in-progress body read, so this stops a stuck/
+        // looping agent immediately rather than waiting it out.
+        stopStreaming: () => {
+          get().activeAbortController?.abort();
+        },
+
         sendMessage: async (text) => {
           const trimmed = text.trim();
           if (!trimmed || get().isStreaming) return;
@@ -370,7 +508,8 @@ export const useChatStore = create<ChatState>()(
           const history = [...toHistory(session.threads[agentId] ?? []), { role: "user" as const, content: trimmed }];
 
           appendMessages(sessionId, agentId, [userMessage, assistantMessage], trimmed);
-          set({ isStreaming: true, error: null });
+          const controller = new AbortController();
+          set({ isStreaming: true, error: null, activeAbortController: controller });
 
           const appendToAssistant = (chunk: string) =>
             appendToMessage(sessionId, agentId, assistantMessage.id, chunk);
@@ -378,39 +517,28 @@ export const useChatStore = create<ChatState>()(
             updateToolEvent(sessionId, agentId, assistantMessage.id, event);
 
           try {
-            const fullText = await streamChatCompletion(agentId, sessionId, history, appendToAssistant, onToolEvent);
+            const fullText = await streamChatCompletion(
+              agentId,
+              sessionId,
+              history,
+              appendToAssistant,
+              onToolEvent,
+              controller.signal
+            );
 
-            const match = DELEGATE_MARKER.exec(fullText);
-            if (match) {
-              const target = DELEGATE_TARGETS[match[1]];
-              const task = match[2].trim();
-
-              set((s) => ({
-                sessions: s.sessions.map((sess) =>
-                  sess.id === sessionId
-                    ? {
-                        ...sess,
-                        threads: {
-                          ...sess.threads,
-                          [agentId]: (sess.threads[agentId] ?? []).map((m) =>
-                            m.id === assistantMessage.id
-                              ? { ...m, content: m.content.replace(DELEGATE_MARKER, "").replace(/^\s+/, "") }
-                              : m
-                          ),
-                        },
-                      }
-                    : sess
-                ),
-              }));
-
-              if (target && task && target !== agentId) {
-                get().delegateToAgent(sessionId, agentId, target, task);
-              }
-            }
+            // Awaited (not fire-and-forget) so isStreaming — and the Stop
+            // button it gates — stays true for the whole delegation chain,
+            // including Eva's follow-up reaction to the report, not just
+            // her initial short hand-off turn.
+            await processDelegateMarker(sessionId, agentId, assistantMessage.id, fullText, onToolEvent, MAX_DELEGATION_HOPS);
           } catch (err) {
-            set({ error: err instanceof Error ? err.message : "Request failed" });
+            if (!isAbortError(err)) {
+              set({ error: err instanceof Error ? err.message : "Request failed" });
+            } else {
+              appendToAssistant("\n\n_Stopped._");
+            }
           } finally {
-            set({ isStreaming: false });
+            set({ isStreaming: false, activeAbortController: null });
           }
         },
 
@@ -452,61 +580,40 @@ export const useChatStore = create<ChatState>()(
             ]);
           };
 
-          try {
-            const result = await streamChatCompletion(targetAgentId, sessionId, history, appendToAssistant, handleToolEvent);
+          const controller = new AbortController();
+          set({ activeAbortController: controller });
 
-            // The delegated agent can itself hand off further (e.g.
-            // Research -> Email) — same marker convention as the top-level
-            // Eva case. Guard against immediate bounce-back to whoever
-            // delegated to us, and against self-delegation.
-            const match = DELEGATE_MARKER.exec(result);
-            const nextTarget = match ? DELEGATE_TARGETS[match[1]] : undefined;
-            const nextTask = match ? match[2].trim() : "";
-            const willDelegateFurther = !!(
-              match &&
-              nextTarget &&
-              nextTask &&
-              nextTarget !== targetAgentId &&
-              nextTarget !== fromAgentId
+          try {
+            const result = await streamChatCompletion(
+              targetAgentId,
+              sessionId,
+              history,
+              appendToAssistant,
+              handleToolEvent,
+              controller.signal
             );
 
-            if (match) {
-              set((s) => ({
-                sessions: s.sessions.map((sess) =>
-                  sess.id === sessionId
-                    ? {
-                        ...sess,
-                        threads: {
-                          ...sess.threads,
-                          [targetAgentId]: (sess.threads[targetAgentId] ?? []).map((m) =>
-                            m.id === assistantMessage.id
-                              ? { ...m, content: m.content.replace(DELEGATE_MARKER, "").replace(/^\s+/, "") }
-                              : m
-                          ),
-                        },
-                      }
-                    : sess
-                ),
-              }));
-            }
-
-            if (willDelegateFurther) {
-              const answer = await get().delegateToAgent(sessionId, targetAgentId, nextTarget!, nextTask, onToolEvent);
-              reportBack(answer);
-              return answer;
-            }
-
+            // Subagents are pure specialists — they never delegate further
+            // (only Eva/jarvis does), so unlike the top-level case there's
+            // no DELEGATE_MARKER check here. Their result is always the
+            // final answer, reported straight back to whoever delegated.
             const answer = result.trim() || "(no response)";
             reportBack(answer);
             return answer;
           } catch (err) {
+            if (isAbortError(err)) {
+              appendToAssistant("\n\n_Stopped._");
+              const stoppedMsg = "Stopped by user";
+              reportBack(stoppedMsg);
+              return stoppedMsg;
+            }
             const detail = err instanceof Error ? err.message : "Request failed";
             appendToAssistant(`\n\n⚠️ Delegated request failed: ${detail}`);
             const failMsg = `⚠️ Failed — ${detail}`;
             reportBack(failMsg);
             return failMsg;
           } finally {
-            set({ activeAgentId: fromAgentId });
+            set({ activeAgentId: fromAgentId, activeAbortController: null });
           }
         },
 
@@ -538,44 +645,32 @@ export const useChatStore = create<ChatState>()(
             onToolEvent?.(event);
           };
 
+          const controller = new AbortController();
+          set({ activeAbortController: controller });
+
           let fullText: string;
           try {
-            fullText = await streamChatCompletion(agentId, sessionId, history, appendToAssistant, handleToolEvent);
+            fullText = await streamChatCompletion(
+              agentId,
+              sessionId,
+              history,
+              appendToAssistant,
+              handleToolEvent,
+              controller.signal
+            );
           } catch (err) {
+            if (isAbortError(err)) {
+              appendToAssistant("\n\n_Stopped._");
+              return "Stopped.";
+            }
             const detail = err instanceof Error ? err.message : "Request failed";
             appendToAssistant(`\n\n⚠️ ${detail}`);
             return `Sorry, I hit an error reaching Eva: ${detail}`;
+          } finally {
+            set({ activeAbortController: null });
           }
 
-          const match = DELEGATE_MARKER.exec(fullText);
-          if (match) {
-            const target = DELEGATE_TARGETS[match[1]];
-            const task = match[2].trim();
-
-            set((s) => ({
-              sessions: s.sessions.map((sess) =>
-                sess.id === sessionId
-                  ? {
-                      ...sess,
-                      threads: {
-                        ...sess.threads,
-                        [agentId]: (sess.threads[agentId] ?? []).map((m) =>
-                          m.id === assistantMessage.id
-                            ? { ...m, content: m.content.replace(DELEGATE_MARKER, "").replace(/^\s+/, "") }
-                            : m
-                        ),
-                      },
-                    }
-                  : sess
-              ),
-            }));
-
-            if (target && task && target !== agentId) {
-              return get().delegateToAgent(sessionId, agentId, target, task, onToolEvent);
-            }
-          }
-
-          return fullText.trim();
+          return processDelegateMarker(sessionId, agentId, assistantMessage.id, fullText, onToolEvent, MAX_DELEGATION_HOPS);
         },
       };
     },

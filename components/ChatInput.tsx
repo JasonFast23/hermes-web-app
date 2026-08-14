@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, FormEvent } from "react";
 import { useChatStore } from "@/lib/store";
 import { pickRecorderMimeType, extForMimeType } from "@/lib/audio";
-import { ArrowUpIcon, FileIcon, MicIcon, PaperclipIcon, PlusIcon, WaveformIcon, XIcon } from "./Icons";
+import { ArrowUpIcon, FileIcon, MicIcon, PaperclipIcon, PlusIcon, StopIcon, WaveformIcon, XIcon } from "./Icons";
 import { VoiceSession } from "./VoiceSession";
 
 type DictationStatus = "idle" | "recording" | "transcribing" | "error";
@@ -22,12 +22,29 @@ export function ChatInput() {
   const dictationChunksRef = useRef<Blob[]>([]);
   const sendMessage = useChatStore((s) => s.sendMessage);
   const isStreaming = useChatStore((s) => s.isStreaming);
+  const stopStreaming = useChatStore((s) => s.stopStreaming);
   const setActiveAgent = useChatStore((s) => s.setActiveAgent);
+
+  // The Stop and Send/Voice buttons occupy the same spot, swapping based on
+  // isStreaming. If a request finishes right as the user clicks Stop, the
+  // click can land on the freshly-idle Send/Voice button instead — and with
+  // no text typed, that opens voice mode. Suppress that for a brief window
+  // right after streaming ends so a stop-click can't be reinterpreted as a
+  // voice-mode request.
+  const wasStreamingRef = useRef(isStreaming);
+  const suppressVoiceUntilRef = useRef(0);
+  useEffect(() => {
+    if (wasStreamingRef.current && !isStreaming) {
+      suppressVoiceUntilRef.current = Date.now() + 600;
+    }
+    wasStreamingRef.current = isStreaming;
+  }, [isStreaming]);
 
   const submit = () => {
     const trimmed = text.trim();
 
     if (!trimmed && attachedFiles.length === 0) {
+      if (Date.now() < suppressVoiceUntilRef.current) return;
       // Voice always talks to Eva (jarvis) — switch to her tab so the live
       // conversation is visible in the chat panel behind the voice bar.
       setActiveAgent("jarvis");
@@ -259,19 +276,36 @@ export function ChatInput() {
               <MicIcon className="h-[18px] w-[18px]" />
             </button>
 
-            <button
-              type="submit"
-              disabled={isStreaming}
-              aria-label={hasText || attachedFiles.length > 0 ? "Send message" : "Start voice session"}
-              title={hasText || attachedFiles.length > 0 ? "Send message" : "Start voice session"}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-white transition-opacity disabled:opacity-40"
-            >
-              {hasText || attachedFiles.length > 0 ? (
-                <ArrowUpIcon className="h-[18px] w-[18px]" />
-              ) : (
-                <WaveformIcon className="h-[18px] w-[18px]" />
-              )}
-            </button>
+            {isStreaming ? (
+              <button
+                key="stop-btn"
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  stopStreaming();
+                }}
+                aria-label="Stop generating"
+                title="Stop generating"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-white transition-opacity hover:opacity-80"
+              >
+                <StopIcon className="h-[16px] w-[16px]" />
+              </button>
+            ) : (
+              <button
+                key="submit-btn"
+                type="submit"
+                aria-label={hasText || attachedFiles.length > 0 ? "Send message" : "Start voice session"}
+                title={hasText || attachedFiles.length > 0 ? "Send message" : "Start voice session"}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-white transition-opacity disabled:opacity-40"
+              >
+                {hasText || attachedFiles.length > 0 ? (
+                  <ArrowUpIcon className="h-[18px] w-[18px]" />
+                ) : (
+                  <WaveformIcon className="h-[18px] w-[18px]" />
+                )}
+              </button>
+            )}
           </div>
         )}
       </div>

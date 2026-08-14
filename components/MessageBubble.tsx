@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { ChatMessage } from "@/lib/store";
+import { FileIcon } from "./Icons";
 
 const REVEAL_INTERVAL_MS = 12;
 const REVEAL_CHARS_PER_TICK = 2;
@@ -44,6 +45,64 @@ function linkify(text: string): ReactNode[] {
     );
     if (trailing) nodes.push(trailing);
   });
+
+  return nodes;
+}
+
+// Emitted by the Case File agent (e.g. "[[SHOWFILE:7984|Complaint.pdf]]")
+// when the user asked to actually see a document, not just be told about
+// it. Rendered as an inline preview/download card instead of literal
+// marker text — served through our own proxy route so the case file
+// backend's key never reaches the browser.
+const SHOWFILE_PATTERN = /\[\[SHOWFILE:(\d+)\|([^\]\n]+)\]\]/g;
+const IMAGE_EXT_PATTERN = /\.(png|jpe?g|gif|webp)$/i;
+
+function FileCard({ fileId, filename }: { fileId: string; filename: string }) {
+  const src = `/api/casefile/files/${fileId}`;
+  const isImage = IMAGE_EXT_PATTERN.test(filename);
+
+  return (
+    <div className="my-1.5 overflow-hidden rounded-xl border border-black/[0.08] bg-white">
+      <div className="flex items-center justify-between gap-2 border-b border-black/[0.06] bg-black/[0.02] px-3 py-2">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <FileIcon className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+          <span className="truncate text-[12px] font-medium text-zinc-700">{filename}</span>
+        </span>
+        <a
+          href={src}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="shrink-0 text-[11px] text-zinc-500 underline underline-offset-2 hover:text-zinc-800"
+        >
+          Open ↗
+        </a>
+      </div>
+      {isImage ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={src} alt={filename} className="max-h-80 w-full bg-zinc-50 object-contain" />
+      ) : (
+        <iframe src={src} title={filename} className="h-80 w-full" />
+      )}
+    </div>
+  );
+}
+
+// Splits on SHOWFILE markers first (rendered as file cards), running the
+// rest of each text segment through linkify() as before.
+function renderContent(text: string): ReactNode[] {
+  const parts = text.split(SHOWFILE_PATTERN);
+  const nodes: ReactNode[] = [];
+
+  for (let i = 0; i < parts.length; i += 3) {
+    const textPart = parts[i];
+    if (textPart) nodes.push(...linkify(textPart));
+
+    const fileId = parts[i + 1];
+    const filename = parts[i + 2];
+    if (fileId && filename) {
+      nodes.push(<FileCard key={`file-${fileId}-${i}`} fileId={fileId} filename={filename.trim()} />);
+    }
+  }
 
   return nodes;
 }
@@ -107,7 +166,7 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
         )}
 
         {visibleContent
-          ? linkify(visibleContent)
+          ? renderContent(visibleContent)
           : toolEvents.length === 0 && (
               <span className="inline-block animate-pulse text-zinc-400">▍</span>
             )}

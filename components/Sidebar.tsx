@@ -5,7 +5,7 @@ import { AGENTS, AgentId } from "@/lib/agents";
 import { ChatSession, useChatStore } from "@/lib/store";
 import { AgentsIcon, MessagingIcon, PanelToggleIcon, PlusIcon, TrashIcon } from "./Icons";
 
-const AGENT_ORDER: AgentId[] = ["jarvis", "email", "graphic"];
+const AGENT_ORDER: AgentId[] = ["jarvis", "email", "graphic", "rag"];
 
 const DATE_GROUP_ORDER = ["Today", "Yesterday", "Older"] as const;
 
