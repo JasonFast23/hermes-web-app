@@ -9,9 +9,9 @@ export function getAgentBackend(agentId: AgentId): AgentBackend | null {
   switch (agentId) {
     case "jarvis":if (!process.env.HERMES_API_URL || !process.env.HERMES_API_KEY) return null;
       return { apiUrl: process.env.HERMES_API_URL, apiKey: process.env.HERMES_API_KEY };
-    case "rag":
-      if (!process.env.HERMES_RAG_API_URL || !process.env.HERMES_RAG_API_KEY) return null;
-      return { apiUrl: process.env.HERMES_RAG_API_URL, apiKey: process.env.HERMES_RAG_API_KEY };
+    //case "rag":
+      //if (!process.env.HERMES_RAG_API_URL || !process.env.HERMES_RAG_API_KEY) return null;
+      //return { apiUrl: process.env.HERMES_RAG_API_URL, apiKey: process.env.HERMES_RAG_API_KEY };
     case "email":
       if (!process.env.HERMES_EMAIL_API_URL || !process.env.HERMES_EMAIL_API_KEY) return null;
       return { apiUrl: process.env.HERMES_EMAIL_API_URL, apiKey: process.env.HERMES_EMAIL_API_KEY };

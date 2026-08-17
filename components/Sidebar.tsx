@@ -1,11 +1,11 @@
 "use client";
 
 import { useMemo } from "react";
-import { AGENTS, AgentId } from "@/lib/agents";
+import { AGENTS, ENABLED_AGENT_IDS } from "@/lib/agents";
 import { ChatSession, useChatStore } from "@/lib/store";
 import { AgentsIcon, MessagingIcon, PanelToggleIcon, PlusIcon, TrashIcon } from "./Icons";
 
-const AGENT_ORDER: AgentId[] = ["jarvis", "email", "graphic", "rag"];
+const AGENT_ORDER = ENABLED_AGENT_IDS;
 
 const DATE_GROUP_ORDER = ["Today", "Yesterday", "Older"] as const;
 

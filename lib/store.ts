@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import { AGENTS, AgentId, DEFAULT_AGENT_ID } from "./agents";
+import { AGENTS, AgentId, DEFAULT_AGENT_ID, ENABLED_AGENT_IDS } from "./agents";
 
 export interface ToolEvent {
   id: string;
@@ -25,6 +25,21 @@ export interface ToolProgressPayload {
   status: string;
 }
 
+// A running log of subagents' final answers per turn, kept separate from
+// any agent's visible thread — it exists purely to give Eva awareness of
+// what Research/Email/Case File found, without those tabs ever showing it
+// and without dumping tool calls or intermediate chatter into her context.
+export interface AgentActivityEntry {
+  agentId: AgentId;
+  summary: string;
+  timestamp: number;
+}
+
+// Bounds how much of the activity log gets kept (and fed to Eva) so a long
+// session doesn't grow this — and the context injected into every one of
+// Eva's turns — without limit.
+const MAX_AGENT_ACTIVITY_ENTRIES = 15;
+
 // A ChatSession is shared across Eva/Email/Research: one id, used as the
 // Hermes session key for all three profiles, so they scope memory/context
 // consistently to "this session" — but each still gets its own thread of
@@ -34,6 +49,7 @@ export interface ChatSession {
   title: string;
   createdAt: number;
   threads: Partial<Record<AgentId, ChatMessage[]>>;
+  agentActivity: AgentActivityEntry[];
 }
 
 interface ChatState {
@@ -74,16 +90,19 @@ interface ChatState {
 
 // Only Eva (jarvis) ever emits a line like "[[DELEGATE:email]] draft a
 // reply to..." — she's the sole orchestrator; the subagents she delegates
-// to (Email/Research/Case File) are pure specialists that report straight
-// back rather than delegating onward themselves. Maps the marker keyword
-// to the internal AgentId (the Research tab's id is "graphic", not
-// "research"; Case File's is "rag").
+// to (Email/Research) are pure specialists that report straight back
+// rather than delegating onward themselves. Maps the marker keyword to
+// the internal AgentId (the Research tab's id is "graphic", not
+// "research").
+// Case File ("casefile" -> "rag") is commented out for now — product
+// focus is email and research alongside Eva. Restore the entry below and
+// the "|casefile" alternation to bring it back.
 const DELEGATE_TARGETS: Record<string, AgentId> = {
   email: "email",
   research: "graphic",
-  casefile: "rag",
+  // casefile: "rag",
 };
-const DELEGATE_MARKER = /^\[\[DELEGATE:(email|research|casefile)\]\][ \t]*(.*)$/m;
+const DELEGATE_MARKER = /^\[\[DELEGATE:(email|research)\]\][ \t]*(.*)$/m;
 
 // Caps how many delegate -> Eva-reacts -> delegate-again cycles a single
 // turn can chain through, so a model that keeps re-delegating can't loop
@@ -96,7 +115,26 @@ function createSession(): ChatSession {
     title: "New session",
     createdAt: Date.now(),
     threads: {},
+    agentActivity: [],
   };
+}
+
+// Formats the session's subagent-activity log into a compact block Eva
+// receives as an extra system message — invisible in every tab's UI, but
+// gives her a running "what did each agent just find" awareness without
+// requiring the user to relay it themselves. Undefined when there's
+// nothing to report, so idle sessions don't pay for an empty block.
+function buildAgentActivityContext(session: ChatSession | undefined): string | undefined {
+  const entries = session?.agentActivity ?? [];
+  if (entries.length === 0) return undefined;
+
+  const lines = entries.map((e) => `${AGENTS[e.agentId].name}: ${e.summary}`);
+  return (
+    "Other agents' recent findings in this session, most recent last " +
+    "(for your awareness only — the user has not seen this as a message " +
+    "from you, so don't refer to it as something you already said):\n\n" +
+    lines.join("\n\n")
+  );
 }
 
 function deriveTitle(text: string): string {
@@ -143,7 +181,8 @@ async function streamChatCompletion(
   history: HistoryMessage[],
   onDelta: (chunk: string) => void,
   onToolEvent?: (event: ToolProgressPayload) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  context?: string
 ): Promise<string> {
   let fullText = "";
 
@@ -154,6 +193,7 @@ async function streamChatCompletion(
       messages: history,
       agentId,
       sessionKey,
+      context,
     }),
     signal,
   });
@@ -288,6 +328,30 @@ export const useChatStore = create<ChatState>()(
         }));
       };
 
+      // Logs a subagent's final answer for a turn into the session's
+      // activity feed — never called for jarvis itself, since Eva doesn't
+      // need a digest of her own replies. Trims to the most recent
+      // MAX_AGENT_ACTIVITY_ENTRIES so a long session's context injection
+      // stays bounded.
+      const recordAgentActivity = (sessionId: string, agentId: AgentId, summary: string) => {
+        const trimmed = summary.trim();
+        if (agentId === "jarvis" || !trimmed) return;
+
+        set((s) => ({
+          sessions: s.sessions.map((sess) =>
+            sess.id === sessionId
+              ? {
+                  ...sess,
+                  agentActivity: [
+                    ...(sess.agentActivity ?? []),
+                    { agentId, summary: trimmed, timestamp: Date.now() },
+                  ].slice(-MAX_AGENT_ACTIVITY_ENTRIES),
+                }
+              : sess
+          ),
+        }));
+      };
+
       const updateToolEvent = (
         sessionId: string,
         agentId: AgentId,
@@ -375,14 +439,16 @@ export const useChatStore = create<ChatState>()(
         return runEvaAfterDelegation(sessionId, onToolEvent, hopsLeft);
       };
 
-      // Gives Eva (jarvis) a fresh turn after a subagent reports back, with
-      // that report already sitting in her thread as context — a plain
-      // nudge (never shown/persisted, matching how the system prompt
-      // itself is invisible) is all that's needed to prompt her actual
-      // reaction, since the chat API needs a trailing user-role turn.
-      // Recurses through processDelegateMarker (bounded by hopsLeft) so a
-      // chain like research -> report -> Eva delegates email keeps working
-      // even though the subagents themselves can no longer chain directly.
+      // Gives Eva (jarvis) a fresh turn after a subagent reports back. The
+      // report itself isn't in her visible thread — it reaches her via the
+      // activity-log context block (buildAgentActivityContext), same as a
+      // direct tab conversation would — so a plain nudge (never shown/
+      // persisted, matching how the system prompt itself is invisible) is
+      // all that's needed to prompt her actual reaction, since the chat
+      // API needs a trailing user-role turn. Recurses through
+      // processDelegateMarker (bounded by hopsLeft) so a chain like
+      // research -> report -> Eva delegates email keeps working even
+      // though the subagents themselves can no longer chain directly.
       const runEvaAfterDelegation = async (
         sessionId: string,
         onToolEvent: ((event: ToolProgressPayload) => void) | undefined,
@@ -406,8 +472,18 @@ export const useChatStore = create<ChatState>()(
           {
             role: "user" as const,
             content:
-              "Continue based on the report above — decide what to do next, " +
-              "delegating again if needed, then respond to the user.",
+              "The agent you delegated to has reported back — see the " +
+              "findings noted above for your awareness. In almost every " +
+              "case that report already answers what the user asked, so " +
+              "just relay/summarize it to them now and stop — do not " +
+              "delegate again on your own initiative. In particular, if " +
+              "the report offers to do more for the USER (e.g. 'if you " +
+              "have a different spelling, I can search again'), that " +
+              "offer is for the user to accept or decline, not something " +
+              "you act on yourself by guessing what they'd say. Only " +
+              "delegate again if the user's ORIGINAL request explicitly " +
+              "required a further step that genuinely hasn't happened " +
+              "yet.",
           },
         ];
 
@@ -422,7 +498,8 @@ export const useChatStore = create<ChatState>()(
             history,
             appendToAssistant,
             handleToolEvent,
-            controller.signal
+            controller.signal,
+            buildAgentActivityContext(session)
           );
         } catch (err) {
           if (isAbortError(err)) {
@@ -523,8 +600,16 @@ export const useChatStore = create<ChatState>()(
               history,
               appendToAssistant,
               onToolEvent,
-              controller.signal
+              controller.signal,
+              agentId === "jarvis" ? buildAgentActivityContext(get().sessions.find((s) => s.id === sessionId)) : undefined
             );
+
+            // A direct conversation with a subagent's own tab (as opposed
+            // to Eva delegating to it) never otherwise reaches Eva — log it
+            // here so she picks it up on her next turn. (No-op when
+            // agentId is jarvis; delegateToAgent logs delegated results
+            // itself, via this same activity feed.)
+            recordAgentActivity(sessionId, agentId, fullText);
 
             // Awaited (not fire-and-forget) so isStreaming — and the Stop
             // button it gates — stays true for the whole delegation chain,
@@ -570,16 +655,6 @@ export const useChatStore = create<ChatState>()(
             onToolEvent?.(event);
           };
 
-          const reportBack = (summary: string) => {
-            appendMessages(sessionId, fromAgentId, [
-              {
-                id: crypto.randomUUID(),
-                role: "assistant",
-                content: `${AGENTS[targetAgentId].name} finished:\n${summary}`,
-              },
-            ]);
-          };
-
           const controller = new AbortController();
           set({ activeAbortController: controller });
 
@@ -596,21 +671,24 @@ export const useChatStore = create<ChatState>()(
             // Subagents are pure specialists — they never delegate further
             // (only Eva/jarvis does), so unlike the top-level case there's
             // no DELEGATE_MARKER check here. Their result is always the
-            // final answer, reported straight back to whoever delegated.
+            // final answer. Eva no longer gets this repeated back to her as
+            // a visible "X Agent finished: ..." message in her own thread —
+            // she picks it up from the activity log (recordAgentActivity)
+            // the same way she picks up direct tab conversations.
             const answer = result.trim() || "(no response)";
-            reportBack(answer);
+            recordAgentActivity(sessionId, targetAgentId, answer);
             return answer;
           } catch (err) {
             if (isAbortError(err)) {
               appendToAssistant("\n\n_Stopped._");
               const stoppedMsg = "Stopped by user";
-              reportBack(stoppedMsg);
+              recordAgentActivity(sessionId, targetAgentId, stoppedMsg);
               return stoppedMsg;
             }
             const detail = err instanceof Error ? err.message : "Request failed";
             appendToAssistant(`\n\n⚠️ Delegated request failed: ${detail}`);
             const failMsg = `⚠️ Failed — ${detail}`;
-            reportBack(failMsg);
+            recordAgentActivity(sessionId, targetAgentId, failMsg);
             return failMsg;
           } finally {
             set({ activeAgentId: fromAgentId, activeAbortController: null });
@@ -656,7 +734,8 @@ export const useChatStore = create<ChatState>()(
               history,
               appendToAssistant,
               handleToolEvent,
-              controller.signal
+              controller.signal,
+              buildAgentActivityContext(session)
             );
           } catch (err) {
             if (isAbortError(err)) {
@@ -692,6 +771,15 @@ export const useChatStore = create<ChatState>()(
         sidebarCollapsed: state.sidebarCollapsed,
         voiceVolume: state.voiceVolume,
       }),
+      // A browser that persisted activeAgentId before Case File was
+      // disabled (e.g. "rag") would otherwise silently keep driving the
+      // conversation through that agent forever, since it's no longer
+      // reachable/settable from the UI. Snap it back to the default.
+      onRehydrateStorage: () => (state) => {
+        if (state && !ENABLED_AGENT_IDS.includes(state.activeAgentId)) {
+          state.activeAgentId = DEFAULT_AGENT_ID;
+        }
+      },
     }
   )
 );

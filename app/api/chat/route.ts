@@ -13,6 +13,10 @@ interface ChatRequestBody {
   messages: ChatHistoryMessage[];
   agentId: string;
   sessionKey: string;
+  // Optional extra system-role context (e.g. Eva's cross-agent activity
+  // digest) inserted after the agent's own system prompt. Invisible to the
+  // conversation history shown in any tab — purely shapes this one reply.
+  context?: string;
 }
 
 function isChatHistory(value: unknown): value is ChatHistoryMessage[] {
@@ -39,7 +43,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { messages: history, agentId, sessionKey } = body;
+  const { messages: history, agentId, sessionKey, context } = body;
 
   if (!isChatHistory(history)) {
     return NextResponse.json({ error: "Missing messages" }, { status: 400 });
@@ -61,9 +65,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const messages = agent.systemPrompt
-    ? [{ role: "system", content: agent.systemPrompt }, ...history]
-    : history;
+  const systemMessages = [
+    ...(agent.systemPrompt ? [{ role: "system", content: agent.systemPrompt }] : []),
+    ...(typeof context === "string" && context.trim() ? [{ role: "system", content: context }] : []),
+  ];
+  const messages = [...systemMessages, ...history];
 
   let hermesRes: Response;
   try {
