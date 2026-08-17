@@ -18,7 +18,7 @@ const TRAILING_PUNCTUATION = /[.,;:!?)\]}'"]+$/;
 // clickable links, so a source next to a claim is actually verifiable
 // instead of inert text. Trims sentence-trailing punctuation off the end
 // of a match so "...(https://example.com)." doesn't link-swallow the ").".
-function linkify(text: string): ReactNode[] {
+function linkify(text: string, keyPrefix: string): ReactNode[] {
   const parts = text.split(URL_PATTERN);
   const matches = text.match(URL_PATTERN) ?? [];
 
@@ -34,7 +34,7 @@ function linkify(text: string): ReactNode[] {
 
     nodes.push(
       <a
-        key={i}
+        key={`${keyPrefix}-link-${i}`}
         href={url}
         target="_blank"
         rel="noopener noreferrer"
@@ -44,6 +44,29 @@ function linkify(text: string): ReactNode[] {
       </a>
     );
     if (trailing) nodes.push(trailing);
+  });
+
+  return nodes;
+}
+
+const BOLD_PATTERN = /\*\*([^\n*]+?)\*\*/g;
+
+// Agents are asked to lead with a short, bolded direct answer (see the
+// Research agent's system prompt) — render that markdown as actual bold
+// instead of leaving literal asterisks in the bubble. Runs linkify() on the
+// plain segments around each bolded span; a URL landing inside ** ** is
+// rare enough not to bother matching too.
+function renderInline(text: string, keyPrefix: string): ReactNode[] {
+  const segments = text.split(BOLD_PATTERN);
+  const nodes: ReactNode[] = [];
+
+  segments.forEach((segment, i) => {
+    if (!segment) return;
+    if (i % 2 === 1) {
+      nodes.push(<strong key={`${keyPrefix}-b-${i}`}>{segment}</strong>);
+    } else {
+      nodes.push(...linkify(segment, `${keyPrefix}-${i}`));
+    }
   });
 
   return nodes;
@@ -88,14 +111,14 @@ function FileCard({ fileId, filename }: { fileId: string; filename: string }) {
 }
 
 // Splits on SHOWFILE markers first (rendered as file cards), running the
-// rest of each text segment through linkify() as before.
+// rest of each text segment through renderInline() (bold + links) as before.
 function renderContent(text: string): ReactNode[] {
   const parts = text.split(SHOWFILE_PATTERN);
   const nodes: ReactNode[] = [];
 
   for (let i = 0; i < parts.length; i += 3) {
     const textPart = parts[i];
-    if (textPart) nodes.push(...linkify(textPart));
+    if (textPart) nodes.push(...renderInline(textPart, `seg-${i}`));
 
     const fileId = parts[i + 1];
     const filename = parts[i + 2];

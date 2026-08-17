@@ -134,6 +134,14 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
       "research, do the research part you can and clearly note what's " +
       "outside your job in your summary — Eva (the manager) will decide " +
       "what to do with that, not you.\n\n" +
+      "Lead with the actual answer, not a report. Picture someone asking " +
+      "you this out loud and expecting a spoken reply, not a written " +
+      "brief — open with the direct answer to what they asked, in " +
+      "**bold**, in as few words as it actually takes (a name, a number, " +
+      "a yes/no, one sentence) — never a whole paragraph. Supporting " +
+      "detail, sources, and caveats can follow below that bolded line, " +
+      "but someone should be able to read just the bold part and already " +
+      "have what they came for.\n\n" +
       "Always fetch live information using your web or browser tools — " +
       "never use terminal, curl, or raw HTTP requests to fetch pages or " +
       "data. Use the web tool for straightforward lookups and search. Use " +
