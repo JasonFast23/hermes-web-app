@@ -167,18 +167,19 @@ interface HistoryMessage {
   content: string;
 }
 
-// Drops empty entries (e.g. an assistant turn left blank by a failed
-// request) so they don't show up as blank turns in the history we replay.
-function toHistory(messages: ChatMessage[]): HistoryMessage[] {
-  return messages
-    .filter((m) => m.content.trim() !== "")
-    .map((m) => ({ role: m.role, content: m.content }));
+// Stable per (chat session, agent) id, sent as X-Hermes-Session-Id so the
+// Hermes backend keeps real conversation continuity — including tool calls
+// and their results — in its own state.db. Deterministic from the two
+// inputs, so it survives page reloads and resumes exactly where a session
+// left off without us tracking anything extra client-side.
+function hermesSessionId(sessionId: string, agentId: AgentId): string {
+  return `${sessionId}:${agentId}`;
 }
 
 async function streamChatCompletion(
   agentId: AgentId,
   sessionKey: string,
-  history: HistoryMessage[],
+  newMessage: HistoryMessage,
   onDelta: (chunk: string) => void,
   onToolEvent?: (event: ToolProgressPayload) => void,
   signal?: AbortSignal,
@@ -190,8 +191,9 @@ async function streamChatCompletion(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      messages: history,
+      messages: [newMessage],
       agentId,
+      hermesSessionId: hermesSessionId(sessionKey, agentId),
       sessionKey,
       context,
     }),
@@ -455,7 +457,6 @@ export const useChatStore = create<ChatState>()(
         hopsLeft: number
       ): Promise<string> => {
         const session = get().sessions.find((s) => s.id === sessionId);
-        const jarvisThread = session?.threads.jarvis ?? [];
 
         const assistantMessage: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: "" };
         appendMessages(sessionId, "jarvis", [assistantMessage]);
@@ -467,25 +468,24 @@ export const useChatStore = create<ChatState>()(
           onToolEvent?.(event);
         };
 
-        const history = [
-          ...toHistory(jarvisThread),
-          {
-            role: "user" as const,
-            content:
-              "The agent you delegated to has reported back — see the " +
-              "findings noted above for your awareness. In almost every " +
-              "case that report already answers what the user asked, so " +
-              "just relay/summarize it to them now and stop — do not " +
-              "delegate again on your own initiative. In particular, if " +
-              "the report offers to do more for the USER (e.g. 'if you " +
-              "have a different spelling, I can search again'), that " +
-              "offer is for the user to accept or decline, not something " +
-              "you act on yourself by guessing what they'd say. Only " +
-              "delegate again if the user's ORIGINAL request explicitly " +
-              "required a further step that genuinely hasn't happened " +
-              "yet.",
-          },
-        ];
+        // Eva's actual prior turns live server-side now (X-Hermes-Session-Id
+        // continuity) — this is just the new nudge turn, not a history replay.
+        const nudge: HistoryMessage = {
+          role: "user",
+          content:
+            "The agent you delegated to has reported back — see the " +
+            "findings noted above for your awareness. In almost every " +
+            "case that report already answers what the user asked, so " +
+            "just relay/summarize it to them now and stop — do not " +
+            "delegate again on your own initiative. In particular, if " +
+            "the report offers to do more for the USER (e.g. 'if you " +
+            "have a different spelling, I can search again'), that " +
+            "offer is for the user to accept or decline, not something " +
+            "you act on yourself by guessing what they'd say. Only " +
+            "delegate again if the user's ORIGINAL request explicitly " +
+            "required a further step that genuinely hasn't happened " +
+            "yet.",
+        };
 
         const controller = new AbortController();
         set({ activeAbortController: controller });
@@ -495,7 +495,7 @@ export const useChatStore = create<ChatState>()(
           fullText = await streamChatCompletion(
             "jarvis",
             sessionId,
-            history,
+            nudge,
             appendToAssistant,
             handleToolEvent,
             controller.signal,
@@ -582,8 +582,6 @@ export const useChatStore = create<ChatState>()(
           const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content: trimmed };
           const assistantMessage: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: "" };
 
-          const history = [...toHistory(session.threads[agentId] ?? []), { role: "user" as const, content: trimmed }];
-
           appendMessages(sessionId, agentId, [userMessage, assistantMessage], trimmed);
           const controller = new AbortController();
           set({ isStreaming: true, error: null, activeAbortController: controller });
@@ -597,7 +595,7 @@ export const useChatStore = create<ChatState>()(
             const fullText = await streamChatCompletion(
               agentId,
               sessionId,
-              history,
+              { role: "user", content: trimmed },
               appendToAssistant,
               onToolEvent,
               controller.signal,
@@ -634,12 +632,6 @@ export const useChatStore = create<ChatState>()(
           const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content: trimmed };
           const assistantMessage: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: "" };
 
-          const targetSession = get().sessions.find((s) => s.id === sessionId);
-          const history = [
-            ...toHistory(targetSession?.threads[targetAgentId] ?? []),
-            { role: "user" as const, content: trimmed },
-          ];
-
           appendMessages(sessionId, targetAgentId, [userMessage, assistantMessage], trimmed);
 
           // Follow the hand-off live: show whichever agent is actually
@@ -662,7 +654,7 @@ export const useChatStore = create<ChatState>()(
             const result = await streamChatCompletion(
               targetAgentId,
               sessionId,
-              history,
+              { role: "user", content: trimmed },
               appendToAssistant,
               handleToolEvent,
               controller.signal
@@ -712,8 +704,6 @@ export const useChatStore = create<ChatState>()(
           const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content: trimmed };
           const assistantMessage: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: "" };
 
-          const history = [...toHistory(session.threads[agentId] ?? []), { role: "user" as const, content: trimmed }];
-
           appendMessages(sessionId, agentId, [userMessage, assistantMessage], trimmed);
 
           const appendToAssistant = (chunk: string) =>
@@ -731,7 +721,7 @@ export const useChatStore = create<ChatState>()(
             fullText = await streamChatCompletion(
               agentId,
               sessionId,
-              history,
+              { role: "user", content: trimmed },
               appendToAssistant,
               handleToolEvent,
               controller.signal,

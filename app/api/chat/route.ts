@@ -13,6 +13,12 @@ interface ChatRequestBody {
   messages: ChatHistoryMessage[];
   agentId: string;
   sessionKey: string;
+  // Stable per (chat session, agent) id. Sent as X-Hermes-Session-Id so the
+  // Hermes backend loads and persists the real conversation — including
+  // tool calls/results — server-side via its own state.db, instead of us
+  // resending the full text history (which never included tool activity
+  // anyway) on every turn.
+  hermesSessionId: string;
   // Optional extra system-role context (e.g. Eva's cross-agent activity
   // digest) inserted after the agent's own system prompt. Invisible to the
   // conversation history shown in any tab — purely shapes this one reply.
@@ -43,7 +49,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { messages: history, agentId, sessionKey, context } = body;
+  const { messages: history, agentId, sessionKey, hermesSessionId, context } = body;
 
   if (!isChatHistory(history)) {
     return NextResponse.json({ error: "Missing messages" }, { status: 400 });
@@ -53,6 +59,9 @@ export async function POST(req: NextRequest) {
   }
   if (!sessionKey || typeof sessionKey !== "string") {
     return NextResponse.json({ error: "Missing sessionKey" }, { status: 400 });
+  }
+  if (!hermesSessionId || typeof hermesSessionId !== "string") {
+    return NextResponse.json({ error: "Missing hermesSessionId" }, { status: 400 });
   }
 
   const agent = AGENTS[agentId];
@@ -79,6 +88,7 @@ export async function POST(req: NextRequest) {
         "Content-Type": "application/json",
         Authorization: `Bearer ${backend.apiKey}`,
         "X-Hermes-Session-Key": sessionKey,
+        "X-Hermes-Session-Id": hermesSessionId,
       },
       body: JSON.stringify({
         model: agent.model,
