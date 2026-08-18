@@ -40,6 +40,19 @@ export interface AgentActivityEntry {
 // Eva's turns — without limit.
 const MAX_AGENT_ACTIVITY_ENTRIES = 15;
 
+// A delegation processDelegateMarker has detected but not yet run — surfaced
+// in the UI as an Approve/Decline card instead of firing automatically.
+// hopsLeft is carried over from the detecting call so the MAX_DELEGATION_HOPS
+// budget is unaffected by the pause.
+export interface PendingDelegation {
+  sessionId: string;
+  fromAgentId: AgentId;
+  targetAgentId: AgentId;
+  task: string;
+  hopsLeft: number;
+  onToolEvent?: (event: ToolProgressPayload) => void;
+}
+
 // A ChatSession is shared across Eva/Email/Research: one id, used as the
 // Hermes session key for all three profiles, so they scope memory/context
 // consistently to "this session" — but each still gets its own thread of
@@ -61,6 +74,9 @@ interface ChatState {
   // whatever's currently running (including mid-delegation) from the UI.
   // Never persisted; it's only meaningful for the live session.
   activeAbortController: AbortController | null;
+  // A delegation awaiting Approve/Decline. Never persisted — holds a live
+  // callback and only makes sense for the page session that detected it.
+  pendingDelegation: PendingDelegation | null;
   error: string | null;
   sidebarCollapsed: boolean;
   view: "chat" | "sessions";
@@ -83,6 +99,8 @@ interface ChatState {
     onToolEvent?: (event: ToolProgressPayload) => void
   ) => Promise<string>;
   askEva: (message: string, onToolEvent?: (event: ToolProgressPayload) => void) => Promise<string>;
+  approveDelegation: () => Promise<void>;
+  declineDelegation: () => void;
   toggleSidebar: () => void;
   setVoiceVolume: (volume: number) => void;
   stopStreaming: () => void;
@@ -399,11 +417,11 @@ export const useChatStore = create<ChatState>()(
 
       // Shared by sendMessage/askEva/runEvaAfterDelegation: checks an
       // agent's just-streamed reply for a [[DELEGATE:x]] marker, strips it
-      // from the displayed message, runs the subagent, then — since
-      // subagents never delegate onward themselves — gives Eva a real
-      // follow-up turn so she actually sees the report and can decide what
-      // happens next, including delegating again. Returns the final text
-      // to show/speak once nothing more is being delegated.
+      // from the displayed message, then — instead of running the subagent
+      // automatically — parks it as a pendingDelegation for the user to
+      // Approve/Decline (see approveDelegation). Returns the text available
+      // right now (the stripped acknowledgment), not the eventual delegated
+      // result, since that no longer resolves synchronously.
       const processDelegateMarker = async (
         sessionId: string,
         agentId: AgentId,
@@ -419,6 +437,8 @@ export const useChatStore = create<ChatState>()(
         const task = match[2].trim();
         if (!target || !task || target === agentId) return fullText.trim();
 
+        const strippedText = fullText.replace(DELEGATE_MARKER, "").replace(/^\s+/, "");
+
         set((s) => ({
           sessions: s.sessions.map((sess) =>
             sess.id === sessionId
@@ -427,18 +447,16 @@ export const useChatStore = create<ChatState>()(
                   threads: {
                     ...sess.threads,
                     [agentId]: (sess.threads[agentId] ?? []).map((m) =>
-                      m.id === messageId
-                        ? { ...m, content: m.content.replace(DELEGATE_MARKER, "").replace(/^\s+/, "") }
-                        : m
+                      m.id === messageId ? { ...m, content: strippedText } : m
                     ),
                   },
                 }
               : sess
           ),
+          pendingDelegation: { sessionId, fromAgentId: agentId, targetAgentId: target, task, hopsLeft, onToolEvent },
         }));
 
-        await get().delegateToAgent(sessionId, agentId, target, task, onToolEvent);
-        return runEvaAfterDelegation(sessionId, onToolEvent, hopsLeft);
+        return strippedText;
       };
 
       // Gives Eva (jarvis) a fresh turn after a subagent reports back. The
@@ -522,6 +540,7 @@ export const useChatStore = create<ChatState>()(
         sessions: [],
         isStreaming: false,
         activeAbortController: null,
+        pendingDelegation: null,
         error: null,
         sidebarCollapsed: false,
         view: "chat",
@@ -536,12 +555,14 @@ export const useChatStore = create<ChatState>()(
           // selection so the panel shows a blank slate. A real session is
           // only added to the list (via ensureActiveSession) once the user
           // actually sends a first message, matching Claude's "New chat".
-          set({ activeSessionId: null, view: "chat" });
+          set({ activeSessionId: null, view: "chat", pendingDelegation: null });
         },
 
         switchSession: (sessionId) => {
           if (!get().sessions.some((s) => s.id === sessionId)) return;
-          set({ activeSessionId: sessionId, view: "chat" });
+          // A pending approval belongs to the session that raised it — don't
+          // let it linger and get approved out of context after switching.
+          set({ activeSessionId: sessionId, view: "chat", pendingDelegation: null });
         },
 
         deleteSession: (sessionId) => {
@@ -571,6 +592,33 @@ export const useChatStore = create<ChatState>()(
           get().activeAbortController?.abort();
         },
 
+        // Runs a delegation processDelegateMarker parked instead of firing
+        // automatically. Mirrors exactly what processDelegateMarker used to
+        // do inline (delegateToAgent, then give Eva a follow-up turn) — if
+        // that follow-up finds another marker, it recurses through
+        // processDelegateMarker again, which parks a new pendingDelegation
+        // rather than auto-continuing, so a chain still needs one approval
+        // per hop.
+        approveDelegation: async () => {
+          const pending = get().pendingDelegation;
+          if (!pending) return;
+          set({ pendingDelegation: null, isStreaming: true });
+          try {
+            await get().delegateToAgent(
+              pending.sessionId,
+              pending.fromAgentId,
+              pending.targetAgentId,
+              pending.task,
+              pending.onToolEvent
+            );
+            await runEvaAfterDelegation(pending.sessionId, pending.onToolEvent, pending.hopsLeft);
+          } finally {
+            set({ isStreaming: false });
+          }
+        },
+
+        declineDelegation: () => set({ pendingDelegation: null }),
+
         sendMessage: async (text) => {
           const trimmed = text.trim();
           if (!trimmed || get().isStreaming) return;
@@ -584,7 +632,9 @@ export const useChatStore = create<ChatState>()(
 
           appendMessages(sessionId, agentId, [userMessage, assistantMessage], trimmed);
           const controller = new AbortController();
-          set({ isStreaming: true, error: null, activeAbortController: controller });
+          // Sending a new message implicitly discards any stale pending
+          // approval rather than leaving it to be approved out of context.
+          set({ isStreaming: true, error: null, activeAbortController: controller, pendingDelegation: null });
 
           const appendToAssistant = (chunk: string) =>
             appendToMessage(sessionId, agentId, assistantMessage.id, chunk);

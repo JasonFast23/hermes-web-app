@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useChatStore } from "@/lib/store";
 import { MessageBubble } from "./MessageBubble";
 import { ChatInput } from "./ChatInput";
+import { PendingDelegationCard } from "./PendingDelegationCard";
 
 function greetingForHour(hour: number): string {
   if (hour < 5) return "Good Evening";
@@ -62,6 +63,10 @@ export function ChatPanel() {
           {error}
         </p>
       )}
+
+      <div className="relative px-4">
+        <PendingDelegationCard />
+      </div>
 
       <div className="relative">
         <ChatInput />
