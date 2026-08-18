@@ -14,17 +14,53 @@ const CATCH_UP_THRESHOLD = 60;
 const URL_PATTERN = /https?:\/\/[^\s<>"')\]]+/g;
 const TRAILING_PUNCTUATION = /[.,;:!?)\]}'"]+$/;
 
+// Wraps every occurrence of a Chats-search query in a <mark> that starts
+// lit and fades to transparent. Applied at the innermost text-node level
+// (inside linkify/renderInline, below), never to raw unparsed content —
+// splitting raw text on the query ahead of bold/link parsing would cut a
+// "**bold**" pair in half whenever a match fell inside it, leaving literal
+// asterisks with no partner to complete the pair.
+function highlightText(text: string, query: string | undefined, glow: boolean, keyPrefix: string): ReactNode[] {
+  if (!query) return [text];
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parts = text.split(new RegExp(`(${escaped})`, "ig"));
+  const nodes: ReactNode[] = [];
+
+  parts.forEach((part, i) => {
+    if (!part) return;
+    if (i % 2 === 1) {
+      nodes.push(
+        <mark
+          key={`${keyPrefix}-m-${i}`}
+          className={`rounded-sm px-0.5 text-zinc-900 transition-colors duration-[1000ms] ${
+            glow ? "bg-amber-300/80" : "bg-transparent"
+          }`}
+        >
+          {part}
+        </mark>
+      );
+    } else {
+      nodes.push(part);
+    }
+  });
+
+  return nodes;
+}
+
 // Turns plain-text URLs (e.g. citations from the Research agent) into real
 // clickable links, so a source next to a claim is actually verifiable
 // instead of inert text. Trims sentence-trailing punctuation off the end
 // of a match so "...(https://example.com)." doesn't link-swallow the ").".
-function linkify(text: string, keyPrefix: string): ReactNode[] {
+// highlightQuery/glow, when present, mark matches within the plain-text
+// segments (not inside the link text itself — a query landing inside a URL
+// is rare enough not to bother with).
+function linkify(text: string, keyPrefix: string, highlightQuery?: string, glow?: boolean): ReactNode[] {
   const parts = text.split(URL_PATTERN);
   const matches = text.match(URL_PATTERN) ?? [];
 
   const nodes: ReactNode[] = [];
   parts.forEach((part, i) => {
-    if (part) nodes.push(part);
+    if (part) nodes.push(...highlightText(part, highlightQuery, !!glow, `${keyPrefix}-t${i}`));
     const rawUrl = matches[i];
     if (!rawUrl) return;
 
@@ -55,17 +91,22 @@ const BOLD_PATTERN = /\*\*([^\n*]+?)\*\*/g;
 // Research agent's system prompt) — render that markdown as actual bold
 // instead of leaving literal asterisks in the bubble. Runs linkify() on the
 // plain segments around each bolded span; a URL landing inside ** ** is
-// rare enough not to bother matching too.
-function renderInline(text: string, keyPrefix: string): ReactNode[] {
+// rare enough not to bother matching too. Splits on BOLD_PATTERN first, so
+// a "**bold**" pair is always resolved as a whole before highlightQuery
+// ever gets a chance to split into its interior — search-matched text
+// inside a bold span still renders bold, with a nested highlight.
+function renderInline(text: string, keyPrefix: string, highlightQuery?: string, glow?: boolean): ReactNode[] {
   const segments = text.split(BOLD_PATTERN);
   const nodes: ReactNode[] = [];
 
   segments.forEach((segment, i) => {
     if (!segment) return;
     if (i % 2 === 1) {
-      nodes.push(<strong key={`${keyPrefix}-b-${i}`}>{segment}</strong>);
+      nodes.push(
+        <strong key={`${keyPrefix}-b-${i}`}>{highlightText(segment, highlightQuery, !!glow, `${keyPrefix}-b${i}`)}</strong>
+      );
     } else {
-      nodes.push(...linkify(segment, `${keyPrefix}-${i}`));
+      nodes.push(...linkify(segment, `${keyPrefix}-${i}`, highlightQuery, glow));
     }
   });
 
@@ -112,13 +153,13 @@ function FileCard({ fileId, filename }: { fileId: string; filename: string }) {
 
 // Splits on SHOWFILE markers first (rendered as file cards), running the
 // rest of each text segment through renderInline() (bold + links) as before.
-function renderContent(text: string): ReactNode[] {
+function renderContent(text: string, highlightQuery?: string, glow?: boolean): ReactNode[] {
   const parts = text.split(SHOWFILE_PATTERN);
   const nodes: ReactNode[] = [];
 
   for (let i = 0; i < parts.length; i += 3) {
     const textPart = parts[i];
-    if (textPart) nodes.push(...renderInline(textPart, `seg-${i}`));
+    if (textPart) nodes.push(...renderInline(textPart, `seg-${i}`, highlightQuery, glow));
 
     const fileId = parts[i + 1];
     const filename = parts[i + 2];
@@ -132,37 +173,6 @@ function renderContent(text: string): ReactNode[] {
 
 // How long the search-match highlight stays lit before fading.
 const SEARCH_GLOW_MS = 2200;
-
-// Outermost split, ahead of the SHOWFILE/bold/link pipeline: wraps every
-// occurrence of a Chats-search query in a <mark> that starts lit and fades
-// to transparent, so clicking a search result shows exactly where the
-// keyword is instead of just landing on the right message. Non-matched
-// segments still go through the full renderContent pipeline.
-function applySearchHighlight(text: string, query: string, glow: boolean): ReactNode[] {
-  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const parts = text.split(new RegExp(`(${escaped})`, "ig"));
-  const nodes: ReactNode[] = [];
-
-  parts.forEach((part, i) => {
-    if (!part) return;
-    if (i % 2 === 1) {
-      nodes.push(
-        <mark
-          key={`sh-${i}`}
-          className={`rounded-sm px-0.5 text-zinc-900 transition-colors duration-[1000ms] ${
-            glow ? "bg-amber-300/80" : "bg-transparent"
-          }`}
-        >
-          {part}
-        </mark>
-      );
-    } else {
-      nodes.push(...renderContent(part));
-    }
-  });
-
-  return nodes;
-}
 
 export function MessageBubble({
   message,
@@ -255,9 +265,7 @@ export function MessageBubble({
         )}
 
         {visibleContent
-          ? highlightQuery
-            ? applySearchHighlight(visibleContent, highlightQuery, glow)
-            : renderContent(visibleContent)
+          ? renderContent(visibleContent, highlightQuery, glow)
           : toolEvents.length === 0 && (
               <span className="inline-block animate-pulse text-zinc-400">▍</span>
             )}
