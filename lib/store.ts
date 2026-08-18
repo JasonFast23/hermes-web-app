@@ -25,6 +25,46 @@ export interface ToolProgressPayload {
   status: string;
 }
 
+// Plain-English fallback for known tool slugs, so a user unfamiliar with the
+// underlying tool names (e.g. a lawyer, not an engineer) never sees raw
+// backend identifiers like "google-workspace" or "web-search" in the chat.
+const TOOL_NAME_LABELS: Record<string, string> = {
+  browser: "Reading a source page",
+  "web-search": "Searching the web",
+  web_search: "Searching the web",
+  web: "Searching the web",
+  "google-workspace": "Checking your inbox",
+  google_workspace: "Checking your inbox",
+  gmail: "Checking your inbox",
+  terminal: "Running a task",
+  skills: "Using a skill",
+};
+
+function humanizeToolName(tool: string): string {
+  return tool
+    .replace(/[-_]+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// The backend's `label` sometimes carries the literal shell invocation it
+// ran (e.g. `GAPI="python3 ${HERMES_HOME}/.../google_api.py" + 1 command`)
+// or just echoes the tool slug back — both are backend internals, not a
+// description meant for a reader, so they're treated the same as no label
+// at all rather than displayed verbatim.
+const LOOKS_LIKE_CODE = /[$=]|\$\{|\bpython3?\b|\.py\b/i;
+
+export function friendlyToolLabel(event: { tool: string; label?: string }): string {
+  const fallback = TOOL_NAME_LABELS[event.tool] ?? humanizeToolName(event.tool);
+  if (!event.label) return fallback;
+  // A label that's itself a known slug (e.g. the backend echoing "google-
+  // workspace" as the label instead of the `tool` field) still deserves the
+  // friendly mapping, not a verbatim slug dump.
+  if (TOOL_NAME_LABELS[event.label]) return TOOL_NAME_LABELS[event.label];
+  if (event.label === event.tool || LOOKS_LIKE_CODE.test(event.label)) return fallback;
+  return event.label;
+}
+
 // A running log of subagents' final answers per turn, kept separate from
 // any agent's visible thread — it exists purely to give Eva awareness of
 // what Research/Email/Case File found, without those tabs ever showing it
@@ -51,6 +91,9 @@ export interface PendingDelegation {
   task: string;
   hopsLeft: number;
   onToolEvent?: (event: ToolProgressPayload) => void;
+  // Only meaningful when targetAgentId is "graphic" (Research). Undefined
+  // is treated the same as "fast" — see DELEGATE_MARKER.
+  researchMode?: "fast" | "deep";
 }
 
 // A ChatSession is shared across Eva/Email/Research: one id, used as the
@@ -88,9 +131,16 @@ interface ChatState {
   // 0 (silent) to 1 (full) — controls playback volume for Eva's spoken
   // replies in VoiceSession. Persisted like other UI preferences below.
   voiceVolume: number;
+  // When true, a direct message to the Research agent asks for a quick,
+  // single-answer overview (like a search engine's AI Overview) instead of
+  // the default multi-source dig. Never persisted — resets to the thorough
+  // default each load rather than silently staying in a mode the user
+  // picked once and may not remember is still on.
+  researchFastMode: boolean;
 
   setActiveAgent: (id: AgentId) => void;
   setView: (view: "chat" | "sessions") => void;
+  setResearchFastMode: (fast: boolean) => void;
   startNewSession: () => void;
   switchSession: (sessionId: string) => void;
   openSearchResult: (sessionId: string, agentId: AgentId, messageId: string, query: string) => void;
@@ -103,7 +153,8 @@ interface ChatState {
     fromAgentId: AgentId,
     targetAgentId: AgentId,
     task: string,
-    onToolEvent?: (event: ToolProgressPayload) => void
+    onToolEvent?: (event: ToolProgressPayload) => void,
+    researchMode?: "fast" | "deep"
   ) => Promise<string>;
   askEva: (message: string, onToolEvent?: (event: ToolProgressPayload) => void) => Promise<string>;
   approveDelegation: () => Promise<void>;
@@ -127,7 +178,12 @@ const DELEGATE_TARGETS: Record<string, AgentId> = {
   research: "graphic",
   // casefile: "rag",
 };
-const DELEGATE_MARKER = /^\[\[DELEGATE:(email|research)\]\][ \t]*(.*)$/m;
+// Research delegations may optionally carry a :fast or :deep suffix (e.g.
+// "[[DELEGATE:research:deep]]") — see RESEARCH_FAST_MODE_CONTEXT /
+// RESEARCH_DEEP_MODE_CONTEXT. No suffix defaults to fast (processDelegateMarker),
+// matching "quick answer by default, offer to go deeper" rather than the
+// old always-unrestricted delegation behavior.
+const DELEGATE_MARKER = /^\[\[DELEGATE:(email|research)(?::(fast|deep))?\]\][ \t]*(.*)$/m;
 
 // Caps how many delegate -> Eva-reacts -> delegate-again cycles a single
 // turn can chain through, so a model that keeps re-delegating can't loop
@@ -144,20 +200,49 @@ function createSession(): ChatSession {
   };
 }
 
+// Only the excerpt below gets resent to Eva on every future turn (see
+// buildAgentActivityContext) — full findings stay intact in recordAgentActivity's
+// stored entries and in that agent's own tab, just not repeated into
+// context indefinitely.
+const AGENT_ACTIVITY_EXCERPT_CHARS = 500;
+
 // Formats the session's subagent-activity log into a compact block Eva
 // receives as an extra system message — invisible in every tab's UI, but
 // gives her a running "what did each agent just find" awareness without
 // requiring the user to relay it themselves. Undefined when there's
 // nothing to report, so idle sessions don't pay for an empty block.
+//
+// Deliberately bounded two ways, both found necessary by testing: only
+// the most recent entry per agent (not the full history — a long session
+// would otherwise accumulate several full findings and resend all of them
+// on every future turn), and each one truncated to a short excerpt. A
+// full, several-KB finding resent verbatim on every subsequent turn was
+// found to make Eva's replies clip short across the board — even for
+// questions with nothing to do with that finding, like "explain
+// photosynthesis" — not just when she was actually relaying it. The full
+// text is never lost: it's still in recordAgentActivity's stored entry
+// and, unabridged, in that agent's own tab — Eva is told (see her system
+// prompt) to point there for more instead of this block trying to carry
+// the whole thing forward forever.
 function buildAgentActivityContext(session: ChatSession | undefined): string | undefined {
   const entries = session?.agentActivity ?? [];
   if (entries.length === 0) return undefined;
 
-  const lines = entries.map((e) => `${AGENTS[e.agentId].name}: ${e.summary}`);
+  const latestByAgent = new Map<AgentId, AgentActivityEntry>();
+  for (const e of entries) latestByAgent.set(e.agentId, e);
+
+  const lines = Array.from(latestByAgent.values()).map((e) => {
+    const name = AGENTS[e.agentId].name;
+    const isTruncated = e.summary.length > AGENT_ACTIVITY_EXCERPT_CHARS;
+    const excerpt = isTruncated ? `${e.summary.slice(0, AGENT_ACTIVITY_EXCERPT_CHARS)}…` : e.summary;
+    return `${name}: ${excerpt}${isTruncated ? ` [excerpt — full report in the ${name} tab]` : ""}`;
+  });
+
   return (
-    "Other agents' recent findings in this session, most recent last " +
-    "(for your awareness only — the user has not seen this as a message " +
-    "from you, so don't refer to it as something you already said):\n\n" +
+    "Other agents' most recent findings in this session (for your " +
+    "awareness only — the user has not seen this as a message from you, " +
+    "so don't refer to it as something you already said). These are " +
+    "short excerpts, not the complete reports:\n\n" +
     lines.join("\n\n")
   );
 }
@@ -179,6 +264,56 @@ function buildPendingDelegationContext(pending: PendingDelegation | null, sessio
     `approval for that one, shown above.`
   );
 }
+
+// askEva (the voice pipeline's only caller — no text-UI path uses it).
+// Deliberately does NOT tell Eva to write briefly or avoid markdown —
+// this text becomes the actual chat message shown on screen too (same
+// appendToAssistant that powers the visible transcript), so shaping her
+// writing style here would make the on-screen answer short/plain as a
+// side effect, not just the spoken one. She should write exactly as she
+// would for typed chat; VoiceSession's own condense pass + client-side
+// markdown stripping are what shape what's actually spoken, entirely
+// separately from what's displayed. Only worth telling her here is
+// something that's actually true because this came in by voice: that a
+// delegation can't be approved by voice.
+const VOICE_MODE_CONTEXT =
+  "This question came in by voice. If this needs delegating to Research " +
+  "or Email, say so briefly and mention the user will need to check the " +
+  "app to approve it before it actually runs — voice can't approve that " +
+  "for you.";
+
+// Opted into per-message via the Research tab's Fast/Deep toggle. Fast is
+// bounded two ways: this prompt caps it at a handful of sources, and
+// sendMessage also strips "browser" from the toolsets it's allowed to use
+// for the request (see toolsetsOverride below) — rendering a JS-heavy page
+// is the slowest thing the agent can do, so Fast can't reach for it at
+// all, not just get told not to.
+const RESEARCH_FAST_MODE_CONTEXT =
+  "For this question, the user wants a fast overview, not your usual " +
+  "deep research — think of how a search engine's AI Overview answers: " +
+  "a quick search or two is enough. Stop once you've checked roughly " +
+  "3-4 sources (fewer is fine if the answer is already clear) — do not " +
+  "keep searching to cross-verify beyond that. And the ANSWER ITSELF " +
+  "must match that speed: short, plain, natural language — the direct " +
+  "answer plus just enough context to make it useful, the way an AI " +
+  "Overview reads, not a research brief. Skip exhaustive caveat lists. " +
+  "Still ground it in something real and cite that source. If they want " +
+  "more depth after this, they'll ask — don't pre-empt that here.";
+
+// The counterpart to RESEARCH_FAST_MODE_CONTEXT, sent when Deep is
+// selected — makes the toggle's other state an explicit, deliberate
+// choice instead of "Fast has instructions, Deep is just whatever happens
+// by default." Deliberately permissive rather than restrictive: no source
+// count, no tool restriction (full toolsets, including browser) — the
+// agent verifies and cross-references as much as it judges a grounded,
+// quality answer actually needs.
+const RESEARCH_DEEP_MODE_CONTEXT =
+  "For this question, the user specifically wants your full, thorough " +
+  "research process — take as many searches, page visits, and cross-" +
+  "checks as you judge the question actually needs to be confident in " +
+  "a well-grounded answer. There's no source-count cap and no rush; " +
+  "verify claims against multiple sources where it matters rather than " +
+  "settling for the first result.";
 
 function combineContext(...parts: Array<string | undefined>): string | undefined {
   const joined = parts.filter((p): p is string => !!p).join("\n\n");
@@ -231,7 +366,13 @@ async function streamChatCompletion(
   onDelta: (chunk: string) => void,
   onToolEvent?: (event: ToolProgressPayload) => void,
   signal?: AbortSignal,
-  context?: string
+  context?: string,
+  // Narrows which of the agent's own toolsets this one request may use
+  // (e.g. dropping "browser" for Research's Fast mode, see
+  // RESEARCH_FAST_MODE_CONTEXT) — the route only ever narrows, never
+  // widens, so this can't grant a tool the agent isn't already configured
+  // for.
+  toolsetsOverride?: string[]
 ): Promise<string> {
   let fullText = "";
 
@@ -244,6 +385,7 @@ async function streamChatCompletion(
       hermesSessionId: hermesSessionId(sessionKey, agentId),
       sessionKey,
       context,
+      toolsetsOverride,
     }),
     signal,
   });
@@ -464,7 +606,8 @@ export const useChatStore = create<ChatState>()(
         if (!match || hopsLeft <= 0) return fullText.trim();
 
         const target = DELEGATE_TARGETS[match[1]];
-        const task = match[2].trim();
+        const researchMode = match[2] === "deep" ? "deep" : "fast";
+        const task = match[3].trim();
         if (!target || !task || target === agentId) return fullText.trim();
 
         const strippedText = fullText.replace(DELEGATE_MARKER, "").replace(/^\s+/, "");
@@ -483,7 +626,15 @@ export const useChatStore = create<ChatState>()(
                 }
               : sess
           ),
-          pendingDelegation: { sessionId, fromAgentId: agentId, targetAgentId: target, task, hopsLeft, onToolEvent },
+          pendingDelegation: {
+            sessionId,
+            fromAgentId: agentId,
+            targetAgentId: target,
+            task,
+            hopsLeft,
+            onToolEvent,
+            researchMode,
+          },
         }));
 
         return strippedText;
@@ -576,10 +727,12 @@ export const useChatStore = create<ChatState>()(
         sidebarCollapsed: false,
         view: "chat",
         voiceVolume: 1,
+        researchFastMode: false,
 
         setActiveAgent: (id) => set({ activeAgentId: id, view: "chat" }),
         setView: (view) => set({ view }),
         setVoiceVolume: (volume) => set({ voiceVolume: Math.min(1, Math.max(0, volume)) }),
+        setResearchFastMode: (fast) => set({ researchFastMode: fast }),
 
         startNewSession: () => {
           // Don't create a session record yet — just clear the active
@@ -657,7 +810,8 @@ export const useChatStore = create<ChatState>()(
               pending.fromAgentId,
               pending.targetAgentId,
               pending.task,
-              pending.onToolEvent
+              pending.onToolEvent,
+              pending.researchMode
             );
             await runEvaAfterDelegation(pending.sessionId, pending.onToolEvent, pending.hopsLeft);
           } finally {
@@ -698,6 +852,8 @@ export const useChatStore = create<ChatState>()(
           const onToolEvent = (event: ToolProgressPayload) =>
             updateToolEvent(sessionId, agentId, assistantMessage.id, event);
 
+          const researchFast = agentId === "graphic" && get().researchFastMode;
+
           try {
             const fullText = await streamChatCompletion(
               agentId,
@@ -711,7 +867,17 @@ export const useChatStore = create<ChatState>()(
                     buildAgentActivityContext(get().sessions.find((s) => s.id === sessionId)),
                     buildPendingDelegationContext(get().pendingDelegation, sessionId)
                   )
-                : undefined
+                : agentId === "graphic"
+                  ? researchFast
+                    ? RESEARCH_FAST_MODE_CONTEXT
+                    : RESEARCH_DEEP_MODE_CONTEXT
+                  : undefined,
+              // Fast can't reach for the browser tool at all — rendering a
+              // full page is the slowest thing this agent can do, so it's
+              // dropped from what's available rather than just discouraged
+              // in the prompt above. "web" (search) and "skills" stay
+              // available since neither involves rendering a page.
+              researchFast ? ["web", "skills"] : undefined
             );
 
             // A direct conversation with a subagent's own tab (as opposed
@@ -737,7 +903,7 @@ export const useChatStore = create<ChatState>()(
           }
         },
 
-        delegateToAgent: async (sessionId, fromAgentId, targetAgentId, task, onToolEvent) => {
+        delegateToAgent: async (sessionId, fromAgentId, targetAgentId, task, onToolEvent, researchMode) => {
           const trimmed = task.trim();
           if (!trimmed) return "";
 
@@ -754,13 +920,22 @@ export const useChatStore = create<ChatState>()(
 
           const appendToAssistant = (chunk: string) =>
             appendToMessage(sessionId, targetAgentId, assistantMessage.id, chunk);
+          // Deliberately doesn't forward to the caller's onToolEvent — a
+          // subagent's own tool calls (browser, google-workspace, etc.)
+          // belong on its own tab only. Eva has no tools of her own and
+          // should never show another agent's activity as if it were hers.
           const handleToolEvent = (event: ToolProgressPayload) => {
             updateToolEvent(sessionId, targetAgentId, assistantMessage.id, event);
-            onToolEvent?.(event);
           };
 
           const controller = new AbortController();
           set({ activeAbortController: controller });
+
+          // Delegated research defaults to fast (quick answer, offer to go
+          // deeper) unless Eva's marker explicitly asked for :deep — see
+          // DELEGATE_MARKER. Only applies to Research; other targets are
+          // unaffected.
+          const isFastResearch = targetAgentId === "graphic" && researchMode !== "deep";
 
           try {
             const result = await streamChatCompletion(
@@ -769,7 +944,13 @@ export const useChatStore = create<ChatState>()(
               { role: "user", content: trimmed },
               appendToAssistant,
               handleToolEvent,
-              controller.signal
+              controller.signal,
+              targetAgentId === "graphic"
+                ? isFastResearch
+                  ? RESEARCH_FAST_MODE_CONTEXT
+                  : RESEARCH_DEEP_MODE_CONTEXT
+                : undefined,
+              isFastResearch ? ["web", "skills"] : undefined
             );
 
             // Subagents are pure specialists — they never delegate further
@@ -818,8 +999,7 @@ export const useChatStore = create<ChatState>()(
 
           appendMessages(sessionId, agentId, [userMessage, assistantMessage], trimmed);
 
-          const appendToAssistant = (chunk: string) =>
-            appendToMessage(sessionId, agentId, assistantMessage.id, chunk);
+          const appendToAssistant = (chunk: string) => appendToMessage(sessionId, agentId, assistantMessage.id, chunk);
           const handleToolEvent = (event: ToolProgressPayload) => {
             updateToolEvent(sessionId, agentId, assistantMessage.id, event);
             onToolEvent?.(event);
@@ -837,7 +1017,11 @@ export const useChatStore = create<ChatState>()(
               appendToAssistant,
               handleToolEvent,
               controller.signal,
-              combineContext(buildAgentActivityContext(session), buildPendingDelegationContext(get().pendingDelegation, sessionId))
+              combineContext(
+                VOICE_MODE_CONTEXT,
+                buildAgentActivityContext(session),
+                buildPendingDelegationContext(get().pendingDelegation, sessionId)
+              )
             );
           } catch (err) {
             if (isAbortError(err)) {

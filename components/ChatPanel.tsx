@@ -19,6 +19,7 @@ export function ChatPanel() {
   const activeSessionId = useChatStore((s) => s.activeSessionId);
   const error = useChatStore((s) => s.error);
   const scrollToMessage = useChatStore((s) => s.scrollToMessage);
+  const isStreaming = useChatStore((s) => s.isStreaming);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const messages = useMemo(
@@ -67,11 +68,23 @@ export function ChatPanel() {
           >
             {greetingForHour(new Date().getHours())} Priscilla!
           </p>
-          
+
         </div>
       ) : (
         <div className="relative flex-1 space-y-3 overflow-y-auto p-4">
-          {messages.map((message) => {
+          {messages.map((message, i) => {
+            // A delegate-marker message ends up with empty content once the
+            // marker is stripped out (see processDelegateMarker) — nothing
+            // more is ever coming for it, since the real follow-up (Eva's
+            // hand-off line, or her next turn) lands in a separate message.
+            // Rendering it as a permanently-blinking empty bubble was
+            // confusing (looked stuck "typing" forever); skip it entirely
+            // unless it's still the one actually streaming right now.
+            const isEmpty =
+              message.role === "assistant" && !message.content && !message.toolEvents?.length;
+            const isActivelyStreaming = isStreaming && i === messages.length - 1;
+            if (isEmpty && !isActivelyStreaming) return null;
+
             const highlightQuery = scrollToMessage?.messageId === message.id ? scrollToMessage.query : undefined;
             return (
               <div key={message.id} id={`msg-${message.id}`}>

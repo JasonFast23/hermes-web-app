@@ -5,8 +5,13 @@ export const runtime = "nodejs";
 const CONDENSE_SYSTEM_PROMPT =
   "You compress AI assistant replies into a short spoken summary for a " +
   "voice interface. Reply with ONLY the summary — a few natural spoken " +
-  "sentences (2-3 sentences), not the full original. No quotes, no " +
-  "preamble like 'Summary:', no lists or formatting. Cover the key " +
+  "sentences (2-3 sentences), not the full original. Plain spoken text " +
+  "only: no quotes, no preamble like 'Summary:', no lists, and no " +
+  "markdown or emphasis markers of any kind (no **, no _underscores_, " +
+  "no #headings) — even if the original text used them. This gets read " +
+  "aloud by a text-to-speech voice that audibly emphasizes anything " +
+  "wrapped in asterisks, so carrying that formatting over would change " +
+  "how it actually sounds, not just how it looks. Cover the key " +
   "result(s) conversationally; skip restating the question, skip minor " +
   "detail, and offer to send the full version via text or email if " +
   "there's meaningfully more to it.";
@@ -41,7 +46,7 @@ export async function POST(req: NextRequest) {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "llama-3.1-8b-instant",
+        model: "openai/gpt-oss-20b",
         temperature: 0.3,
         stream: true,
         messages: [

@@ -23,6 +23,12 @@ interface ChatRequestBody {
   // digest) inserted after the agent's own system prompt. Invisible to the
   // conversation history shown in any tab — purely shapes this one reply.
   context?: string;
+  // Optional narrowing of the agent's configured toolsets for this one
+  // request (e.g. Research's Fast mode dropping "browser"). Only ever
+  // narrows — anything not already in the agent's own toolsets is ignored,
+  // so a client can't use this to grant a tool the agent isn't configured
+  // for.
+  toolsetsOverride?: unknown;
 }
 
 function isChatHistory(value: unknown): value is ChatHistoryMessage[] {
@@ -49,7 +55,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { messages: history, agentId, sessionKey, hermesSessionId, context } = body;
+  const { messages: history, agentId, sessionKey, hermesSessionId, context, toolsetsOverride } = body;
 
   if (!isChatHistory(history)) {
     return NextResponse.json({ error: "Missing messages" }, { status: 400 });
@@ -80,6 +86,12 @@ export async function POST(req: NextRequest) {
   ];
   const messages = [...systemMessages, ...history];
 
+  const narrowedToolsets =
+    Array.isArray(toolsetsOverride) &&
+    toolsetsOverride.every((t): t is string => typeof t === "string" && agent.toolsets.includes(t))
+      ? toolsetsOverride
+      : agent.toolsets;
+
   let hermesRes: Response;
   try {
     hermesRes = await fetch(`${backend.apiUrl}/v1/chat/completions`, {
@@ -92,7 +104,7 @@ export async function POST(req: NextRequest) {
       },
       body: JSON.stringify({
         model: agent.model,
-        toolsets: agent.toolsets,
+        toolsets: narrowedToolsets,
         stream: true,
         messages,
       }),

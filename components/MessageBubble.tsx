@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { ChatMessage, useChatStore } from "@/lib/store";
+import { ChatMessage, ToolEvent, friendlyToolLabel, useChatStore } from "@/lib/store";
 import { FileIcon } from "./Icons";
 
 const REVEAL_INTERVAL_MS = 12;
@@ -235,7 +235,20 @@ export function MessageBubble({
   }, [message.content, isUser]);
 
   const visibleContent = isUser ? message.content : message.content.slice(0, displayLength);
-  const toolEvents = message.toolEvents ?? [];
+  // Several distinct tool calls (e.g. a few Google API requests in a row)
+  // often collapse to the same friendly label — show that phrase once
+  // rather than repeating it, keeping the latest call's status/id so a
+  // still-running group keeps pulsing.
+  const toolEvents = (message.toolEvents ?? []).reduce<(ToolEvent & { label: string })[]>((acc, event) => {
+    const label = friendlyToolLabel(event);
+    const prev = acc[acc.length - 1];
+    if (prev && prev.label === label) {
+      acc[acc.length - 1] = { ...event, label };
+    } else {
+      acc.push({ ...event, label });
+    }
+    return acc;
+  }, []);
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -258,7 +271,7 @@ export function MessageBubble({
                 <span className={event.status === "running" ? "animate-pulse" : ""}>
                   {event.emoji ?? "⚙️"}
                 </span>
-                <span className="truncate">{event.label ?? event.tool}</span>
+                <span className="truncate">{event.label}</span>
               </div>
             ))}
           </div>

@@ -14,16 +14,34 @@ type Status =
   | "speaking"
   | "error";
 
-// Answers at or under this word count are already about as short as a
-// "few sentences" summary would be — skip the extra condense round trip.
-const CONDENSE_SKIP_WORD_COUNT = 40;
-
 const SENTENCE_BOUNDARY = /[.!?]+[)"'”]?(?:\s+|$)/;
 const MAX_BUFFER = 220;
 
+// ElevenLabs audibly emphasizes markdown emphasis markers — wrapping a
+// word in ** genuinely changes its spoken tone/stress, confirmed by ear,
+// not just leaving literal asterisks in the audio. Telling the model not
+// to use markdown isn't reliable enough on its own (her own text-chat
+// prompt tells her to bold the direct answer, and that instruction wins
+// out here often enough to matter), so this is stripped unconditionally
+// before anything reaches TTS, regardless of what she actually wrote.
+function stripMarkdownForSpeech(text: string): string {
+  return text
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/_([^_]+)_/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^[-*]\s+/gm, "");
+}
+
+// Answers at or under this word count are already about as short as a
+// "few sentences" summary would be — skip the extra condense round trip
+// and speak them directly.
+const CONDENSE_SKIP_WORD_COUNT = 40;
+
 // Buffers streamed text and emits complete sentences as they're detected,
-// so TTS can start on the first sentence of the condensed summary while
-// the condense model is still generating the rest of it.
+// so TTS can start on the first sentence of a condensed summary while the
+// condense model is still generating the rest of it.
 function createSentenceChunker(onSentence: (text: string) => void) {
   let buffer = "";
   const drain = () => {
@@ -196,7 +214,7 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
   };
 
   const enqueueSpeech = (text: string, signal: AbortSignal) => {
-    const trimmed = text.trim();
+    const trimmed = stripMarkdownForSpeech(text).trim();
     if (!trimmed || signal.aborted) return;
     const synthPromise = fetch("/api/voice/tts", {
       method: "POST",
@@ -212,14 +230,16 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
     enqueueSpeechFromPromise(synthPromise, signal);
   };
 
-  // Eva's/the delegate's real answer is full quality, unmodified — written
-  // to be read, not heard. Rather than asking the agent to self-limit
-  // (unreliable), condense it down to a short spoken summary via a fast,
-  // single-purpose model after the fact, streaming that summary into TTS
-  // sentence-by-sentence as it's generated (rather than waiting for the
-  // whole 2-3 sentence summary) so speech starts a little sooner. Falls
-  // back to speaking the original full answer if condensing fails before
-  // anything was spoken, so a hiccup here never means silence.
+  // Eva's real answer is full quality, unmodified — written to be read on
+  // screen, not heard. Short answers are already about as short as a
+  // spoken summary would be, so skip the extra condense round trip and
+  // speak them directly (enqueueSpeech's stripMarkdownForSpeech still
+  // guards against stray emphasis markers either way). Longer answers get
+  // condensed into a short, genuinely oral-sounding summary via a fast
+  // single-purpose model — streamed into TTS sentence-by-sentence as it's
+  // generated rather than waiting for the whole summary. Falls back to
+  // speaking the original full answer if condensing fails before anything
+  // was spoken, so a hiccup here never means silence.
   const speakCondensed = async (text: string, signal: AbortSignal) => {
     const trimmed = text.trim();
     const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
