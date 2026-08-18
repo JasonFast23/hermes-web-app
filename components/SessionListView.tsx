@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useChatStore } from "@/lib/store";
+import { AgentId } from "@/lib/agents";
 import { CheckIcon, PlusIcon, SearchIcon, XIcon } from "./Icons";
 
 const SNIPPET_RADIUS = 40;
@@ -67,6 +68,7 @@ function formatRelativeTime(timestamp: number): string {
 export function SessionListView() {
   const sessions = useChatStore((s) => s.sessions);
   const switchSession = useChatStore((s) => s.switchSession);
+  const openSearchResult = useChatStore((s) => s.openSearchResult);
   const startNewSession = useChatStore((s) => s.startNewSession);
   const deleteSessions = useChatStore((s) => s.deleteSessions);
 
@@ -91,19 +93,21 @@ export function SessionListView() {
   }, [sessions, query]);
 
   // For sessions whose match came from message content rather than the
-  // title, find the matching message so a highlighted snippet of it can
-  // be shown under the title for context.
+  // title, find the matching message — both for the highlighted snippet
+  // shown under the title, and so clicking the row can jump straight to
+  // that agent thread and message (openSearchResult) instead of just
+  // opening the session and leaving the user to hunt for it.
   const matchSnippets = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const map = new Map<string, string>();
+    const map = new Map<string, { agentId: AgentId; messageId: string; content: string }>();
     if (!q) return map;
 
     for (const session of visibleSessions) {
       if (session.title.toLowerCase().includes(q)) continue;
-      for (const messages of Object.values(session.threads)) {
+      for (const [agentId, messages] of Object.entries(session.threads) as [AgentId, typeof session.threads[AgentId]][]) {
         const hit = messages?.find((m) => m.content.toLowerCase().includes(q));
         if (hit) {
-          map.set(session.id, hit.content);
+          map.set(session.id, { agentId, messageId: hit.id, content: hit.content });
           break;
         }
       }
@@ -130,6 +134,15 @@ export function SessionListView() {
   const handleRowClick = (id: string) => {
     if (selecting) {
       toggleSelected(id);
+      return;
+    }
+    // A content match (as opposed to a title-only match, or no active
+    // search) jumps straight to the agent thread and message it came
+    // from and briefly highlights it, instead of just opening the
+    // session and leaving the user to hunt for the keyword themselves.
+    const match = query.trim() ? matchSnippets.get(id) : undefined;
+    if (match) {
+      openSearchResult(id, match.agentId, match.messageId, query.trim());
     } else {
       switchSession(id);
     }
@@ -255,7 +268,7 @@ export function SessionListView() {
                   </span>
                   {query && matchedContent && (
                     <span className="mt-0.5 block truncate text-[12.5px] text-zinc-500">
-                      {highlightMatches(buildSnippet(matchedContent, query), query)}
+                      {highlightMatches(buildSnippet(matchedContent.content, query), query)}
                     </span>
                   )}
                 </span>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { ChatMessage } from "@/lib/store";
+import { ChatMessage, useChatStore } from "@/lib/store";
 import { FileIcon } from "./Icons";
 
 const REVEAL_INTERVAL_MS = 12;
@@ -130,8 +130,74 @@ function renderContent(text: string): ReactNode[] {
   return nodes;
 }
 
-export function MessageBubble({ message }: { message: ChatMessage }) {
+// How long the search-match highlight stays lit before fading.
+const SEARCH_GLOW_MS = 2200;
+
+// Outermost split, ahead of the SHOWFILE/bold/link pipeline: wraps every
+// occurrence of a Chats-search query in a <mark> that starts lit and fades
+// to transparent, so clicking a search result shows exactly where the
+// keyword is instead of just landing on the right message. Non-matched
+// segments still go through the full renderContent pipeline.
+function applySearchHighlight(text: string, query: string, glow: boolean): ReactNode[] {
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parts = text.split(new RegExp(`(${escaped})`, "ig"));
+  const nodes: ReactNode[] = [];
+
+  parts.forEach((part, i) => {
+    if (!part) return;
+    if (i % 2 === 1) {
+      nodes.push(
+        <mark
+          key={`sh-${i}`}
+          className={`rounded-sm px-0.5 text-zinc-900 transition-colors duration-[1000ms] ${
+            glow ? "bg-amber-300/80" : "bg-transparent"
+          }`}
+        >
+          {part}
+        </mark>
+      );
+    } else {
+      nodes.push(...renderContent(part));
+    }
+  });
+
+  return nodes;
+}
+
+export function MessageBubble({
+  message,
+  highlightQuery,
+}: {
+  message: ChatMessage;
+  highlightQuery?: string;
+}) {
   const isUser = message.role === "user";
+
+  // Seeded lit whenever this instance mounts with a highlightQuery already
+  // set — ChatPanel keys the bubble on highlight state, so a message that
+  // *starts* being the search target remounts fresh here rather than this
+  // effect reaching back to flip glow on (which would be a same-render
+  // setState-in-effect anti-pattern). The effect's only job is the fade
+  // timer, a genuine "after mount" side effect.
+  const [glow, setGlow] = useState(() => !!highlightQuery);
+  const clearScrollTarget = useChatStore((s) => s.clearScrollTarget);
+
+  // This local timer is the single source of truth for how long a search
+  // highlight lasts — ChatPanel used to own a separate timer for this and
+  // it raced awkwardly with React re-renders, sometimes clearing the store
+  // target (and thus the highlight) well before it should have. Clearing
+  // scrollToMessage here, once the fade genuinely completes, is safe even
+  // if a newer highlight has since taken over: that transition already
+  // remounted this instance with a fresh key, so a stale timer from an old
+  // instance can't be the one firing this late.
+  useEffect(() => {
+    if (!glow) return;
+    const t = setTimeout(() => {
+      setGlow(false);
+      clearScrollTarget();
+    }, SEARCH_GLOW_MS);
+    return () => clearTimeout(t);
+  }, [glow, clearScrollTarget]);
 
   // Assistant text reveals a couple characters at a time regardless of how
   // chunky the underlying network stream is. Seeded to the full length on
@@ -189,7 +255,9 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
         )}
 
         {visibleContent
-          ? renderContent(visibleContent)
+          ? highlightQuery
+            ? applySearchHighlight(visibleContent, highlightQuery, glow)
+            : renderContent(visibleContent)
           : toolEvents.length === 0 && (
               <span className="inline-block animate-pulse text-zinc-400">▍</span>
             )}

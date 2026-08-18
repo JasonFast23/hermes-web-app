@@ -18,6 +18,7 @@ export function ChatPanel() {
   const activeAgentId = useChatStore((s) => s.activeAgentId);
   const activeSessionId = useChatStore((s) => s.activeSessionId);
   const error = useChatStore((s) => s.error);
+  const scrollToMessage = useChatStore((s) => s.scrollToMessage);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const messages = useMemo(
@@ -25,9 +26,21 @@ export function ChatPanel() {
     [sessions, activeSessionId, activeAgentId]
   );
 
+  // A search-result navigation scrolls to the specific matched message
+  // instead of the bottom; otherwise (new message, agent/session switch)
+  // scroll to the bottom as before. Guarding on scrollToMessage keeps the
+  // two behaviors from racing on the same render. Clearing scrollToMessage
+  // itself is MessageBubble's job (tied to its own highlight fade timer,
+  // not a separate one here — see its comment for why).
   useEffect(() => {
+    if (scrollToMessage && messages.some((m) => m.id === scrollToMessage.messageId)) {
+      document
+        .getElementById(`msg-${scrollToMessage.messageId}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, scrollToMessage]);
 
   return (
     <section className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -51,9 +64,18 @@ export function ChatPanel() {
         </div>
       ) : (
         <div className="relative flex-1 space-y-3 overflow-y-auto p-4">
-          {messages.map((message) => (
-            <MessageBubble key={message.id} message={message} />
-          ))}
+          {messages.map((message) => {
+            const highlightQuery = scrollToMessage?.messageId === message.id ? scrollToMessage.query : undefined;
+            return (
+              <div key={message.id} id={`msg-${message.id}`}>
+                {/* Keyed on whether this message is *starting* to be the
+                    search-highlight target, so MessageBubble remounts fresh
+                    (glow seeded true) instead of needing an effect to reach
+                    back and flip it on after the fact. */}
+                <MessageBubble key={highlightQuery ? "hl" : "plain"} message={message} highlightQuery={highlightQuery} />
+              </div>
+            );
+          })}
           <div ref={bottomRef} />
         </div>
       )}

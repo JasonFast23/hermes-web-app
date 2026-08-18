@@ -77,6 +77,11 @@ interface ChatState {
   // A delegation awaiting Approve/Decline. Never persisted — holds a live
   // callback and only makes sense for the page session that detected it.
   pendingDelegation: PendingDelegation | null;
+  // Set when a Chats-search result is clicked: which message to scroll to
+  // and briefly highlight in the chat panel, and the query that matched it
+  // (so the exact matched text, not just the message, can be marked).
+  // Never persisted — purely a one-shot navigation hint for ChatPanel.
+  scrollToMessage: { messageId: string; query: string } | null;
   error: string | null;
   sidebarCollapsed: boolean;
   view: "chat" | "sessions";
@@ -88,6 +93,8 @@ interface ChatState {
   setView: (view: "chat" | "sessions") => void;
   startNewSession: () => void;
   switchSession: (sessionId: string) => void;
+  openSearchResult: (sessionId: string, agentId: AgentId, messageId: string, query: string) => void;
+  clearScrollTarget: () => void;
   deleteSession: (sessionId: string) => void;
   deleteSessions: (sessionIds: string[]) => void;
   sendMessage: (text: string) => Promise<void>;
@@ -541,6 +548,7 @@ export const useChatStore = create<ChatState>()(
         isStreaming: false,
         activeAbortController: null,
         pendingDelegation: null,
+        scrollToMessage: null,
         error: null,
         sidebarCollapsed: false,
         view: "chat",
@@ -555,15 +563,32 @@ export const useChatStore = create<ChatState>()(
           // selection so the panel shows a blank slate. A real session is
           // only added to the list (via ensureActiveSession) once the user
           // actually sends a first message, matching Claude's "New chat".
-          set({ activeSessionId: null, view: "chat", pendingDelegation: null });
+          set({ activeSessionId: null, view: "chat", pendingDelegation: null, scrollToMessage: null });
         },
 
         switchSession: (sessionId) => {
           if (!get().sessions.some((s) => s.id === sessionId)) return;
-          // A pending approval belongs to the session that raised it — don't
-          // let it linger and get approved out of context after switching.
-          set({ activeSessionId: sessionId, view: "chat", pendingDelegation: null });
+          // A pending approval (or search-result scroll target) belongs to
+          // the session that raised it — don't let it linger and fire out
+          // of context after switching.
+          set({ activeSessionId: sessionId, view: "chat", pendingDelegation: null, scrollToMessage: null });
         },
+
+        // Used by the Chats search results: jump straight to the session,
+        // agent thread, and specific message a keyword matched, instead of
+        // just opening the session and leaving the user to hunt for it.
+        openSearchResult: (sessionId, agentId, messageId, query) => {
+          if (!get().sessions.some((s) => s.id === sessionId)) return;
+          set({
+            activeSessionId: sessionId,
+            activeAgentId: agentId,
+            view: "chat",
+            pendingDelegation: null,
+            scrollToMessage: { messageId, query },
+          });
+        },
+
+        clearScrollTarget: () => set({ scrollToMessage: null }),
 
         deleteSession: (sessionId) => {
           get().deleteSessions([sessionId]);
@@ -633,8 +658,15 @@ export const useChatStore = create<ChatState>()(
           appendMessages(sessionId, agentId, [userMessage, assistantMessage], trimmed);
           const controller = new AbortController();
           // Sending a new message implicitly discards any stale pending
-          // approval rather than leaving it to be approved out of context.
-          set({ isStreaming: true, error: null, activeAbortController: controller, pendingDelegation: null });
+          // approval/scroll target rather than leaving them to fire or
+          // highlight out of context.
+          set({
+            isStreaming: true,
+            error: null,
+            activeAbortController: controller,
+            pendingDelegation: null,
+            scrollToMessage: null,
+          });
 
           const appendToAssistant = (chunk: string) =>
             appendToMessage(sessionId, agentId, assistantMessage.id, chunk);
