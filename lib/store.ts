@@ -162,6 +162,29 @@ function buildAgentActivityContext(session: ChatSession | undefined): string | u
   );
 }
 
+// pendingDelegation now persists across the user's follow-up messages
+// (see sendMessage) instead of silently clearing, so without this Eva has
+// no way to know a delegation she proposed is still just sitting there
+// unapproved — she'd otherwise answer a "did you do it?" from memory of
+// having said she'd delegate, confidently claiming it's in progress when
+// it never actually ran.
+function buildPendingDelegationContext(pending: PendingDelegation | null, sessionId: string): string | undefined {
+  if (!pending || pending.sessionId !== sessionId) return undefined;
+  return (
+    `You proposed delegating to the ${AGENTS[pending.targetAgentId].name} a moment ago ` +
+    `("${pending.task}") but the user has not approved or declined it yet — it has NOT ` +
+    `run, and nothing has come back from it. Do not say it's done, in progress, or that ` +
+    `you're waiting on the agent to report — none of that is true yet. If it's relevant ` +
+    `to what the user just asked, tell them plainly you're still waiting on their ` +
+    `approval for that one, shown above.`
+  );
+}
+
+function combineContext(...parts: Array<string | undefined>): string | undefined {
+  const joined = parts.filter((p): p is string => !!p).join("\n\n");
+  return joined || undefined;
+}
+
 function deriveTitle(text: string): string {
   const trimmed = text.trim().replace(/\s+/g, " ");
   if (!trimmed) return "New session";
@@ -657,14 +680,16 @@ export const useChatStore = create<ChatState>()(
 
           appendMessages(sessionId, agentId, [userMessage, assistantMessage], trimmed);
           const controller = new AbortController();
-          // Sending a new message implicitly discards any stale pending
-          // approval/scroll target rather than leaving them to fire or
-          // highlight out of context.
+          // A pending delegation approval is a real, separate decision the
+          // user still owes a click on — sending a new message (even just
+          // a status check like "did you do it?") must NOT silently
+          // discard it; only an explicit approve/decline, or moving to a
+          // different session, should. scrollToMessage is unrelated UI
+          // navigation state and still fine to drop here.
           set({
             isStreaming: true,
             error: null,
             activeAbortController: controller,
-            pendingDelegation: null,
             scrollToMessage: null,
           });
 
@@ -681,7 +706,12 @@ export const useChatStore = create<ChatState>()(
               appendToAssistant,
               onToolEvent,
               controller.signal,
-              agentId === "jarvis" ? buildAgentActivityContext(get().sessions.find((s) => s.id === sessionId)) : undefined
+              agentId === "jarvis"
+                ? combineContext(
+                    buildAgentActivityContext(get().sessions.find((s) => s.id === sessionId)),
+                    buildPendingDelegationContext(get().pendingDelegation, sessionId)
+                  )
+                : undefined
             );
 
             // A direct conversation with a subagent's own tab (as opposed
@@ -807,7 +837,7 @@ export const useChatStore = create<ChatState>()(
               appendToAssistant,
               handleToolEvent,
               controller.signal,
-              buildAgentActivityContext(session)
+              combineContext(buildAgentActivityContext(session), buildPendingDelegationContext(get().pendingDelegation, sessionId))
             );
           } catch (err) {
             if (isAbortError(err)) {

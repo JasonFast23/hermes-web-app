@@ -26,21 +26,28 @@ export function ChatPanel() {
     [sessions, activeSessionId, activeAgentId]
   );
 
-  // A search-result navigation scrolls to the specific matched message
-  // instead of the bottom; otherwise (new message, agent/session switch)
-  // scroll to the bottom as before. Guarding on scrollToMessage keeps the
-  // two behaviors from racing on the same render. Clearing scrollToMessage
-  // itself is MessageBubble's job (tied to its own highlight fade timer,
-  // not a separate one here — see its comment for why).
+  // A search-result navigation scrolls to the specific matched message.
   useEffect(() => {
-    if (scrollToMessage && messages.some((m) => m.id === scrollToMessage.messageId)) {
-      document
-        .getElementById(`msg-${scrollToMessage.messageId}`)
-        ?.scrollIntoView({ behavior: "smooth", block: "center" });
-      return;
-    }
+    if (!scrollToMessage || !messages.some((m) => m.id === scrollToMessage.messageId)) return;
+    document
+      .getElementById(`msg-${scrollToMessage.messageId}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [scrollToMessage, messages]);
+
+  // Scroll to the bottom on new messages or switching threads. Deliberately
+  // depends on `messages` ONLY — not scrollToMessage — even though it reads
+  // scrollToMessage's value: MessageBubble clears scrollToMessage itself
+  // once its highlight fade completes (see its own comment for why), and
+  // that clear must NOT be a trigger for this effect, or every search
+  // highlight would yank the view down to the bottom a couple seconds
+  // after landing on it. Including scrollToMessage in the deps array would
+  // do exactly that — re-run this effect on the clear, at which point the
+  // guard below is already false and it falls through to the bottom-scroll.
+  useEffect(() => {
+    if (scrollToMessage) return;
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, scrollToMessage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages]);
 
   return (
     <section className="relative flex min-w-0 flex-1 flex-col overflow-hidden">

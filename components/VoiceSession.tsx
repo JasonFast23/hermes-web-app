@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useChatStore, type ToolProgressPayload } from "@/lib/store";
+import { useChatStore } from "@/lib/store";
 import { pickRecorderMimeType, extForMimeType } from "@/lib/audio";
 import { XIcon } from "./Icons";
 
@@ -14,20 +14,9 @@ type Status =
   | "speaking"
   | "error";
 
-const FILLER_TEXTS = [
-  "Let me check that.",
-  "One moment.",
-  "Just a second.",
-  "Let me look into that.",
-];
-const FILLER_DELAY_MS = 3000;
 // Answers at or under this word count are already about as short as a
 // "few sentences" summary would be — skip the extra condense round trip.
 const CONDENSE_SKIP_WORD_COUNT = 40;
-// Minimum gap between spoken tool-activity narrations, so a burst of tool
-// calls doesn't queue up a long tail of "doing X... doing Y..." clips that
-// delays the real answer.
-const NARRATION_COOLDOWN_MS = 2500;
 
 const SENTENCE_BOUNDARY = /[.!?]+[)"'”]?(?:\s+|$)/;
 const MAX_BUFFER = 220;
@@ -130,7 +119,6 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
   const objectUrlRef = useRef<string | null>(null);
   const closedRef = useRef(false);
   const speechChainRef = useRef<Promise<void>>(Promise.resolve());
-  const fillerBlobRef = useRef<Promise<Blob | null> | null>(null);
   const askEva = useChatStore((s) => s.askEva);
   const voiceVolume = useChatStore((s) => s.voiceVolume);
 
@@ -262,99 +250,10 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
     }
   };
 
-  const prefetchFiller = () => {
-    if (fillerBlobRef.current) return;
-    const text = FILLER_TEXTS[Math.floor(Math.random() * FILLER_TEXTS.length)];
-    fillerBlobRef.current = fetch("/api/voice/tts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    })
-      .then((res) => (res.ok ? res.blob() : null))
-      .catch(() => null);
-  };
-
-  // Turns a raw tool/skill name (e.g. "google-workspace") into a short,
-  // simple spoken phrase a non-technical person would understand, via a
-  // fast single-purpose model — then synthesizes it. Falls back to a
-  // generic phrase if either step fails, so a hiccup here never surfaces
-  // jargon or breaks the turn. `phase` picks between a "starting" phrase
-  // ("Checking your email") and a "just finished" one ("Found it"), so a
-  // single tool call reads as a reactive start/finish beat, not one flat
-  // "doing something" cue.
-  const narrateToolEvent = async (
-    event: ToolProgressPayload,
-    phase: "start" | "done",
-    signal: AbortSignal
-  ): Promise<Blob | null> => {
-    let phrase = phase === "done" ? "Got it." : "Working on that.";
-    try {
-      const res = await fetch("/api/voice/narrate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tool: event.tool, label: event.label, phase }),
-        signal,
-      });
-      const data = await res.json();
-      if (res.ok && typeof data.phrase === "string" && data.phrase.trim()) {
-        phrase = data.phrase.trim();
-      }
-    } catch (err) {
-      if (!signal.aborted) console.error("Narrate failed, using fallback phrase:", err);
-    }
-
-    try {
-      const ttsRes = await fetch("/api/voice/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: phrase }),
-        signal,
-      });
-      return ttsRes.ok ? await ttsRes.blob() : null;
-    } catch {
-      return null;
-    }
-  };
-
   const processTurn = async (blob: Blob, ext: string) => {
     const controller = new AbortController();
     abortRef.current = controller;
     speechChainRef.current = Promise.resolve();
-
-    let fillerTimer: ReturnType<typeof setTimeout> | null = null;
-    const clearFillerTimer = () => {
-      if (fillerTimer !== null) {
-        clearTimeout(fillerTimer);
-        fillerTimer = null;
-      }
-    };
-
-    const narratedStartIds = new Set<string>();
-    const narratedDoneIds = new Set<string>();
-    let lastNarrationAt = 0;
-
-    const handleToolEvent = (event: ToolProgressPayload) => {
-      if (controller.signal.aborted) return;
-
-      const phase = event.status === "running" ? "start" : event.status === "completed" ? "done" : null;
-      if (!phase) return;
-
-      const seenIds = phase === "start" ? narratedStartIds : narratedDoneIds;
-      if (seenIds.has(event.toolCallId)) return;
-      // Only narrate a step finishing if we actually narrated it starting —
-      // a bare "Found it" with no preceding context would be confusing.
-      if (phase === "done" && !narratedStartIds.has(event.toolCallId)) return;
-
-      const now = Date.now();
-      if (now - lastNarrationAt < NARRATION_COOLDOWN_MS) return;
-
-      seenIds.add(event.toolCallId);
-      lastNarrationAt = now;
-
-      clearFillerTimer();
-      setStatus("speaking");
-      enqueueSpeechFromPromise(narrateToolEvent(event, phase, controller.signal), controller.signal);
-    };
 
     try {
       setStatus("transcribing");
@@ -376,21 +275,7 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
 
       setStatus("thinking");
 
-      fillerTimer = setTimeout(() => {
-        fillerTimer = null;
-        if (controller.signal.aborted) return;
-        const fillerPromise = fillerBlobRef.current;
-        if (!fillerPromise) return;
-        setStatus("speaking");
-        enqueueSpeechFromPromise(fillerPromise, controller.signal);
-      }, FILLER_DELAY_MS);
-
-      let answer: string;
-      try {
-        answer = await askEva(transcript, handleToolEvent);
-      } finally {
-        clearFillerTimer();
-      }
+      const answer = await askEva(transcript);
 
       if (answer.trim() && !controller.signal.aborted) {
         await speakCondensed(answer, controller.signal);
@@ -407,7 +292,6 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
 
   const startRecording = async () => {
     setErrorMessage(null);
-    prefetchFiller();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       micStreamRef.current = stream;
@@ -457,7 +341,7 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
   // thinking, or her speaking) and immediately starts listening for the
   // next thing. Every async step in processTurn/speech playback already
   // checks this same AbortController's signal, so aborting here is enough
-  // to stop future narration/TTS/playback from starting — we only need to
+  // to stop future TTS/playback from starting — we only need to
   // explicitly stop audio that's *already* playing, since pausing doesn't
   // happen automatically just because the signal was aborted.
   const interrupt = () => {
