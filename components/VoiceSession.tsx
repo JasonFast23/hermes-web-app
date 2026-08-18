@@ -34,14 +34,12 @@ function stripMarkdownForSpeech(text: string): string {
     .replace(/^[-*]\s+/gm, "");
 }
 
-// Answers at or under this word count are already about as short as a
-// "few sentences" summary would be — skip the extra condense round trip
-// and speak them directly.
-const CONDENSE_SKIP_WORD_COUNT = 40;
-
-// Buffers streamed text and emits complete sentences as they're detected,
-// so TTS can start on the first sentence of a condensed summary while the
-// condense model is still generating the rest of it.
+// Buffers Eva's own streamed reply and emits complete sentences as
+// they're detected, so TTS can start on the first sentence while she's
+// still generating the rest — this is the only place that used to also
+// buffer a second "condense" pass's output; there's just one LLM call
+// now (see VOICE_MODE_CONTEXT in lib/store.ts), so this chunks her real
+// generation directly.
 function createSentenceChunker(onSentence: (text: string) => void) {
   let buffer = "";
   const drain = () => {
@@ -74,56 +72,6 @@ function createSentenceChunker(onSentence: (text: string) => void) {
   };
 }
 
-// Consumes the SSE stream from /api/voice/condense (plain OpenAI-compatible
-// chat-completion chunks — same shape as Hermes' stream, just no tool
-// events) and reports each text delta as it arrives.
-async function streamCondense(text: string, onDelta: (chunk: string) => void, signal: AbortSignal): Promise<void> {
-  const res = await fetch("/api/voice/condense", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-    signal,
-  });
-
-  if (!res.ok || !res.body) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(detail || "Condense request failed");
-  }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let streamDone = false;
-
-  while (!streamDone) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-
-    for (const line of lines) {
-      const trimmedLine = line.trim();
-      if (!trimmedLine.startsWith("data:")) continue;
-
-      const data = trimmedLine.slice(5).trim();
-      if (data === "[DONE]") {
-        streamDone = true;
-        break;
-      }
-
-      try {
-        const parsed = JSON.parse(data);
-        const delta = parsed?.choices?.[0]?.delta?.content;
-        if (typeof delta === "string" && delta) onDelta(delta);
-      } catch (err) {
-        console.error("Failed to parse SSE chunk from condense:", data, err);
-      }
-    }
-  }
-}
-
 export function VoiceSession({ onClose }: { onClose: () => void }) {
   const [status, setStatus] = useState<Status>("connecting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -137,6 +85,11 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
   const objectUrlRef = useRef<string | null>(null);
   const closedRef = useRef(false);
   const speechChainRef = useRef<Promise<void>>(Promise.resolve());
+  // The last sentence handed to TTS, for previous_text continuity (see
+  // enqueueSpeech). Updated synchronously in generation order — sentences
+  // can synthesize concurrently (only playback is serialized), so this
+  // must be set at hand-off time, not when a fetch happens to resolve.
+  const previousSpokenTextRef = useRef("");
   const askEva = useChatStore((s) => s.askEva);
   const voiceVolume = useChatStore((s) => s.voiceVolume);
 
@@ -216,10 +169,12 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
   const enqueueSpeech = (text: string, signal: AbortSignal) => {
     const trimmed = stripMarkdownForSpeech(text).trim();
     if (!trimmed || signal.aborted) return;
+    const previousText = previousSpokenTextRef.current;
+    previousSpokenTextRef.current = trimmed;
     const synthPromise = fetch("/api/voice/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: trimmed }),
+      body: JSON.stringify({ text: trimmed, previousText }),
       signal,
     })
       .then((res) => (res.ok ? res.blob() : Promise.reject(new Error("Speech synthesis failed"))))
@@ -230,50 +185,57 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
     enqueueSpeechFromPromise(synthPromise, signal);
   };
 
-  // Eva's real answer is full quality, unmodified — written to be read on
-  // screen, not heard. Short answers are already about as short as a
-  // spoken summary would be, so skip the extra condense round trip and
-  // speak them directly (enqueueSpeech's stripMarkdownForSpeech still
-  // guards against stray emphasis markers either way). Longer answers get
-  // condensed into a short, genuinely oral-sounding summary via a fast
-  // single-purpose model — streamed into TTS sentence-by-sentence as it's
-  // generated rather than waiting for the whole summary. Falls back to
-  // speaking the original full answer if condensing fails before anything
-  // was spoken, so a hiccup here never means silence.
-  const speakCondensed = async (text: string, signal: AbortSignal) => {
-    const trimmed = text.trim();
-    const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
-    if (wordCount <= CONDENSE_SKIP_WORD_COUNT) {
-      setStatus("speaking");
-      enqueueSpeech(trimmed, signal);
-      return;
-    }
+  // Eva's own reply is a single streamed call now (VOICE_MODE_CONTEXT in
+  // lib/store.ts shapes her to write conversationally in the first place)
+  // — this just chunks that stream into sentences and speaks each one as
+  // it arrives, no separate condense pass.
+  //
+  // The one thing that must never be spoken is a raw [[DELEGATE:...]]
+  // marker: when she's handing off to Research/Email, her entire reply
+  // (per her base prompt) IS that marker line and nothing else, so there
+  // is genuinely nothing to say for that turn — the Approve/Decline card
+  // covers it visually. "[[DELEGATE:".length characters are buffered
+  // before anything is committed to speech, just enough to tell the two
+  // cases apart with no meaningful added latency.
+  const DELEGATE_PREFIX = "[[DELEGATE:";
 
-    let anySpoken = false;
+  const speakStreamed = (signal: AbortSignal) => {
+    let sniff = "";
+    let resolved = false;
+    let isDelegating = false;
+
     const chunker = createSentenceChunker((sentence) => {
       if (signal.aborted) return;
-      anySpoken = true;
       setStatus("speaking");
       enqueueSpeech(sentence, signal);
     });
 
-    try {
-      await streamCondense(trimmed, (delta) => chunker.push(delta), signal);
-      chunker.flush();
-    } catch (err) {
-      if (signal.aborted) return;
-      console.error("Condense streaming failed, speaking full answer:", err);
-      if (!anySpoken) {
-        setStatus("speaking");
-        enqueueSpeech(trimmed, signal);
+    const onDelta = (delta: string) => {
+      if (resolved) {
+        if (!isDelegating) chunker.push(delta);
+        return;
       }
-    }
+      sniff += delta;
+      if (DELEGATE_PREFIX.startsWith(sniff)) {
+        if (sniff.length >= DELEGATE_PREFIX.length) {
+          resolved = true;
+          isDelegating = true;
+        }
+        return; // still ambiguous (or confirmed delegating) — hold back
+      }
+      resolved = true;
+      isDelegating = false;
+      chunker.push(sniff);
+    };
+
+    return { onDelta, flush: () => chunker.flush() };
   };
 
   const processTurn = async (blob: Blob, ext: string) => {
     const controller = new AbortController();
     abortRef.current = controller;
     speechChainRef.current = Promise.resolve();
+    previousSpokenTextRef.current = "";
 
     try {
       setStatus("transcribing");
@@ -295,11 +257,9 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
 
       setStatus("thinking");
 
-      const answer = await askEva(transcript);
-
-      if (answer.trim() && !controller.signal.aborted) {
-        await speakCondensed(answer, controller.signal);
-      }
+      const { onDelta, flush } = speakStreamed(controller.signal);
+      await askEva(transcript, undefined, onDelta);
+      flush();
 
       await speechChainRef.current;
       if (!controller.signal.aborted) setStatus("idle");

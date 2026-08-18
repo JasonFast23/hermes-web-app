@@ -156,7 +156,11 @@ interface ChatState {
     onToolEvent?: (event: ToolProgressPayload) => void,
     researchMode?: "fast" | "deep"
   ) => Promise<string>;
-  askEva: (message: string, onToolEvent?: (event: ToolProgressPayload) => void) => Promise<string>;
+  askEva: (
+    message: string,
+    onToolEvent?: (event: ToolProgressPayload) => void,
+    onDelta?: (chunk: string) => void
+  ) => Promise<string>;
   approveDelegation: () => Promise<void>;
   declineDelegation: () => void;
   toggleSidebar: () => void;
@@ -266,21 +270,38 @@ function buildPendingDelegationContext(pending: PendingDelegation | null, sessio
 }
 
 // askEva (the voice pipeline's only caller — no text-UI path uses it).
-// Deliberately does NOT tell Eva to write briefly or avoid markdown —
-// this text becomes the actual chat message shown on screen too (same
-// appendToAssistant that powers the visible transcript), so shaping her
-// writing style here would make the on-screen answer short/plain as a
-// side effect, not just the spoken one. She should write exactly as she
-// would for typed chat; VoiceSession's own condense pass + client-side
-// markdown stripping are what shape what's actually spoken, entirely
-// separately from what's displayed. Only worth telling her here is
-// something that's actually true because this came in by voice: that a
-// delegation can't be approved by voice.
+// This is the entire shaping of what gets spoken: VoiceSession streams
+// this call's own text straight into TTS sentence-by-sentence as it
+// generates, with no second "condense" pass rewriting it afterward — so
+// what she writes here IS what gets said, at generation time, not
+// something compressed after the fact. Everything about *what* she
+// decides (delegate vs. answer herself, the delegation rules, the marker
+// format) is unchanged from her base prompt; this context only overrides
+// *how she writes it* for a call instead of a chat message.
 const VOICE_MODE_CONTEXT =
-  "This question came in by voice. If this needs delegating to Research " +
-  "or Email, say so briefly and mention the user will need to check the " +
-  "app to approve it before it actually runs — voice can't approve that " +
-  "for you.";
+  "This is a live spoken phone call, not a chat message — there is no " +
+  "screen, nothing written is being displayed anywhere, and no one is " +
+  "reading you. Someone listening to speech doesn't have the attention " +
+  "span they'd have reading the same thing on a screen — an explanation " +
+  "that's fine written out becomes exhausting to just sit and listen " +
+  "to, and it starts to feel like it's never going to end. So default " +
+  "to brief and direct: the shortest thing that actually answers what " +
+  "they asked, usually one sentence, rarely more than two. Lead with " +
+  "the answer itself — don't build up to it, don't explain your " +
+  "reasoning, don't list caveats unless one genuinely changes the " +
+  "answer. Only go longer than that if they explicitly ask for more " +
+  "('tell me more', 'explain that') or the request itself can't be done " +
+  "any shorter (e.g. reading something back verbatim) — and even then, " +
+  "stay as tight as the request allows rather than defaulting back to a " +
+  "full explanation. Never use markdown, bullet points, headings, or a " +
+  "bolded lead-in — none of that means anything spoken aloud, so just " +
+  "say the thing plainly, the way you'd say it out loud to someone in " +
+  "the room. If this needs delegating to Research or Email, the marker " +
+  "line is still your entire reply exactly as your base instructions " +
+  "say — say nothing else in that turn; once it's approved and reported " +
+  "back, react to it conversationally like anything else, still brief. " +
+  "The user will need to check the app to approve a delegation before " +
+  "it actually runs — voice can't approve that for you.";
 
 // Opted into per-message via the Research tab's Fast/Deep toggle. Fast is
 // bounded two ways: this prompt caps it at a handful of sources, and
@@ -985,8 +1006,13 @@ export const useChatStore = create<ChatState>()(
         // machinery as the text UI (real session, visible in the sidebar,
         // full [[DELEGATE:x]] support) — unlike sendMessage, this awaits
         // the final answer (including any delegated result) so it can be
-        // sent to TTS.
-        askEva: async (message, onToolEvent) => {
+        // sent to TTS. onDelta, when given, fires with each raw text chunk
+        // as it streams in — VoiceSession uses this to start speaking
+        // sentences as they're generated instead of waiting for the whole
+        // reply, which together with VOICE_MODE_CONTEXT (below) is what
+        // replaced the old generate-then-condense two-call pipeline with a
+        // single call.
+        askEva: async (message, onToolEvent, onDelta) => {
           const trimmed = message.trim();
           if (!trimmed) return "";
 
@@ -999,7 +1025,10 @@ export const useChatStore = create<ChatState>()(
 
           appendMessages(sessionId, agentId, [userMessage, assistantMessage], trimmed);
 
-          const appendToAssistant = (chunk: string) => appendToMessage(sessionId, agentId, assistantMessage.id, chunk);
+          const appendToAssistant = (chunk: string) => {
+            appendToMessage(sessionId, agentId, assistantMessage.id, chunk);
+            onDelta?.(chunk);
+          };
           const handleToolEvent = (event: ToolProgressPayload) => {
             updateToolEvent(sessionId, agentId, assistantMessage.id, event);
             onToolEvent?.(event);

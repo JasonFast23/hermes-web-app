@@ -4,6 +4,16 @@ export const runtime = "nodejs";
 
 interface TtsRequestBody {
   text: string;
+  // The sentence spoken immediately before this one in the same turn, if
+  // any. Each sentence is synthesized as its own independent request (so
+  // TTS can start on the first one while Eva is still generating the
+  // rest) — without this, ElevenLabs has no idea a given fragment is a
+  // continuation of anything and predicts its prosody/energy from
+  // scratch each time, which is what produces audible loud/quiet swings
+  // between consecutive sentences. Passing it as `previous_text` is
+  // ElevenLabs' documented mechanism for keeping chunked synthesis
+  // consistent across calls.
+  previousText?: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -40,6 +50,7 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         text: text.trim(),
         model_id: "eleven_turbo_v2_5",
+        ...(body.previousText?.trim() ? { previous_text: body.previousText.trim() } : {}),
       }),
     });
   } catch {
