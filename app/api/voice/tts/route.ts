@@ -49,7 +49,10 @@ export async function POST(req: NextRequest) {
       },
       body: JSON.stringify({
         text: text.trim(),
-        model_id: "eleven_turbo_v2_5",
+        // Flash generates in ~75ms vs. Turbo's ~250-300ms — the model
+        // ElevenLabs themselves recommend for real-time/conversational
+        // use, at a small, accepted quality cost.
+        model_id: "eleven_flash_v2_5",
         ...(body.previousText?.trim() ? { previous_text: body.previousText.trim() } : {}),
       }),
     });

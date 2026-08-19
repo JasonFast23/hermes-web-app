@@ -216,16 +216,26 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
         return;
       }
       sniff += delta;
-      if (DELEGATE_PREFIX.startsWith(sniff)) {
-        if (sniff.length >= DELEGATE_PREFIX.length) {
-          resolved = true;
-          isDelegating = true;
-        }
-        return; // still ambiguous (or confirmed delegating) — hold back
+      // Streamed chunks aren't guaranteed to arrive one character at a
+      // time — a single delta can easily carry the whole marker line (or
+      // a whole ordinary sentence) at once, so the "still ambiguous"
+      // check only makes sense while sniff is still shorter than the
+      // prefix. Once it's at least as long, decide for real by checking
+      // sniff itself, not the other way around (DELEGATE_PREFIX.startsWith
+      // (sniff) silently stops being meaningful past that point, since a
+      // short string can never "start with" a longer one — that was the
+      // bug: any delta large enough to overshoot 11 chars in one go fell
+      // through as if it were ordinary speech).
+      if (sniff.length < DELEGATE_PREFIX.length) {
+        if (DELEGATE_PREFIX.startsWith(sniff)) return; // still ambiguous — need more
+        resolved = true;
+        isDelegating = false;
+        chunker.push(sniff);
+        return;
       }
       resolved = true;
-      isDelegating = false;
-      chunker.push(sniff);
+      isDelegating = sniff.startsWith(DELEGATE_PREFIX);
+      if (!isDelegating) chunker.push(sniff);
     };
 
     return { onDelta, flush: () => chunker.flush() };
