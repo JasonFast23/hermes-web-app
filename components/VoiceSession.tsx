@@ -90,6 +90,23 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
   // can synthesize concurrently (only playback is serialized), so this
   // must be set at hand-off time, not when a fetch happens to resolve.
   const previousSpokenTextRef = useRef("");
+  // --- Timing diagnostics ---------------------------------------------
+  // Temporary instrumentation to find out exactly where the perceived
+  // "gap between sentences" comes from: LLM generation, the TTS round
+  // trip, or genuine dead air where playback caught up to synthesis.
+  // turnStartRef is t=0 for a turn (set the moment the recorded clip is
+  // handed off, i.e. right after the user stops talking). lastPlaybackEndRef
+  // is when the previous clip's audio actually finished playing, so the
+  // "GAP" log is a direct measurement of the silence you're hearing, not
+  // an inference. Remove once the diagnosis is confirmed.
+  const turnStartRef = useRef(0);
+  const sentenceIndexRef = useRef(0);
+  const lastPlaybackEndRef = useRef(0);
+  const mark = (label: string, extra?: Record<string, unknown>) => {
+    const elapsed = Math.round(performance.now() - turnStartRef.current);
+    console.log(`[voice +${elapsed}ms] ${label}`, extra ?? "");
+  };
+  // ----------------------------------------------------------------------
   const askEva = useChatStore((s) => s.askEva);
   const voiceVolume = useChatStore((s) => s.voiceVolume);
 
@@ -130,7 +147,7 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
     }
   };
 
-  const playBlob = (blob: Blob, signal: AbortSignal): Promise<void> =>
+  const playBlob = (blob: Blob, signal: AbortSignal, index: number): Promise<void> =>
     new Promise((resolve) => {
       if (signal.aborted || !audioElRef.current) {
         resolve();
@@ -144,14 +161,21 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
       const cleanup = () => {
         audioEl.onended = null;
         audioEl.onerror = null;
+        mark(`audio[${index}]: ended`);
+        lastPlaybackEndRef.current = performance.now();
         resolve();
       };
       audioEl.onended = cleanup;
       audioEl.onerror = cleanup;
+      if (lastPlaybackEndRef.current > 0) {
+        const gapMs = Math.round(performance.now() - lastPlaybackEndRef.current);
+        mark(`audio[${index}]: GAP since previous sentence ended = ${gapMs}ms`);
+      }
+      mark(`audio[${index}]: play() called`);
       audioEl.play().catch(cleanup);
     });
 
-  const enqueueSpeechFromPromise = (blobPromise: Promise<Blob | null>, signal: AbortSignal) => {
+  const enqueueSpeechFromPromise = (blobPromise: Promise<Blob | null>, signal: AbortSignal, index: number) => {
     if (signal.aborted) return;
     speechChainRef.current = speechChainRef.current.then(async () => {
       if (signal.aborted) return;
@@ -162,15 +186,17 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
         blob = null;
       }
       if (!blob || signal.aborted) return;
-      await playBlob(blob, signal);
+      await playBlob(blob, signal, index);
     });
   };
 
   const enqueueSpeech = (text: string, signal: AbortSignal) => {
     const trimmed = stripMarkdownForSpeech(text).trim();
     if (!trimmed || signal.aborted) return;
+    const index = sentenceIndexRef.current++;
     const previousText = previousSpokenTextRef.current;
     previousSpokenTextRef.current = trimmed;
+    mark(`tts[${index}]: request start`, { text: trimmed.slice(0, 60) });
     const synthPromise = fetch("/api/voice/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -178,11 +204,15 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
       signal,
     })
       .then((res) => (res.ok ? res.blob() : Promise.reject(new Error("Speech synthesis failed"))))
+      .then((result) => {
+        mark(`tts[${index}]: blob ready`);
+        return result;
+      })
       .catch((err) => {
         if (!signal.aborted) console.error("TTS failed for sentence:", trimmed, err);
         return null;
       });
-    enqueueSpeechFromPromise(synthPromise, signal);
+    enqueueSpeechFromPromise(synthPromise, signal, index);
   };
 
   // Eva's own reply is a single streamed call now (VOICE_MODE_CONTEXT in
@@ -203,14 +233,20 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
     let sniff = "";
     let resolved = false;
     let isDelegating = false;
+    let firstDeltaSeen = false;
 
     const chunker = createSentenceChunker((sentence) => {
       if (signal.aborted) return;
+      mark("sentence detected", { text: sentence.slice(0, 60) });
       setStatus("speaking");
       enqueueSpeech(sentence, signal);
     });
 
     const onDelta = (delta: string) => {
+      if (!firstDeltaSeen) {
+        firstDeltaSeen = true;
+        mark("llm: first delta received");
+      }
       if (resolved) {
         if (!isDelegating) chunker.push(delta);
         return;
@@ -246,9 +282,14 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
     abortRef.current = controller;
     speechChainRef.current = Promise.resolve();
     previousSpokenTextRef.current = "";
+    turnStartRef.current = performance.now();
+    sentenceIndexRef.current = 0;
+    lastPlaybackEndRef.current = 0;
+    mark("turn start (recording stopped)");
 
     try {
       setStatus("transcribing");
+      mark("stt: request start");
       const form = new FormData();
       form.append("audio", blob, `recording.${ext}`);
       const sttRes = await fetch("/api/voice/stt", {
@@ -258,6 +299,7 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
       });
       const sttData = await sttRes.json();
       if (!sttRes.ok) throw new Error(sttData?.error || "Transcription failed");
+      mark("stt: got transcript");
 
       const transcript = typeof sttData.text === "string" ? sttData.text.trim() : "";
       if (!transcript) {
@@ -266,12 +308,15 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
       }
 
       setStatus("thinking");
+      mark("llm: askEva call start");
 
       const { onDelta, flush } = speakStreamed(controller.signal);
       await askEva(transcript, undefined, onDelta);
+      mark("llm: askEva call resolved (full text done generating)");
       flush();
 
       await speechChainRef.current;
+      mark("turn done (all audio finished playing)");
       if (!controller.signal.aborted) setStatus("idle");
     } catch (err) {
       if (controller.signal.aborted) return;
