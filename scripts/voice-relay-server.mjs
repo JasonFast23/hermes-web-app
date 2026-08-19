@@ -102,6 +102,8 @@ wss.on("connection", (client) => {
     }
   });
 
+  let loggedFirstChunk = false;
+
   upstream.on("message", (raw) => {
     let msg;
     try {
@@ -110,6 +112,22 @@ wss.on("connection", (client) => {
       return;
     }
     if (typeof msg.audio === "string") {
+      // Diagnostic: confirm the returned audio is actually raw PCM and not
+      // silently MP3 despite requesting output_format=pcm_24000 — there's
+      // a documented history of ElevenLabs' WS endpoint doing exactly that.
+      // MP3 frames start with a sync word: byte 0 = 0xFF, byte 1's top 3
+      // bits all set (0xE0..0xFF). Real 16-bit PCM has no such constraint,
+      // so seeing that pattern here would confirm the mismatch directly
+      // instead of inferring it from playback symptoms.
+      if (!loggedFirstChunk) {
+        loggedFirstChunk = true;
+        const bytes = Buffer.from(msg.audio, "base64");
+        const looksLikeMp3 = bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0;
+        console.log(
+          `voice-relay: first audio chunk — ${bytes.length} bytes, first 8: ${bytes.subarray(0, 8).toString("hex")}` +
+            (looksLikeMp3 ? " — LOOKS LIKE MP3, NOT RAW PCM" : " — looks like raw PCM, as requested")
+        );
+      }
       sendToClient({ type: "audio", audio: msg.audio, sampleRate: SAMPLE_RATE });
     }
     if (msg.isFinal) {
