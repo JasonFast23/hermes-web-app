@@ -5,6 +5,7 @@ import { useChatStore } from "@/lib/store";
 import { MessageBubble } from "./MessageBubble";
 import { ChatInput } from "./ChatInput";
 import { PendingDelegationCard } from "./PendingDelegationCard";
+import { VoiceOrb } from "./VoiceOrb";
 
 function greetingForHour(hour: number): string {
   if (hour < 5) return "Good Evening";
@@ -20,6 +21,7 @@ export function ChatPanel() {
   const error = useChatStore((s) => s.error);
   const scrollToMessage = useChatStore((s) => s.scrollToMessage);
   const isStreaming = useChatStore((s) => s.isStreaming);
+  const voiceOpen = useChatStore((s) => s.voiceOpen);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const messages = useMemo(
@@ -57,7 +59,20 @@ export function ChatPanel() {
         <div className="absolute -top-24 left-1/3 h-[360px] w-[360px] rounded-full bg-gradient-to-br from-sky-100/40 to-transparent blur-3xl" />
       </div>
 
-      {messages.length === 0 ? (
+      {voiceOpen && activeAgentId === "jarvis" ? (
+        // Hide Eva's own thread specifically — reading her reply while also
+        // hearing it is what this avoids (see the voiceOpen comment in
+        // lib/store.ts). Scoped to her tab only, not voiceOpen in general:
+        // delegateToAgent/runEvaAfterDelegation already switch activeAgentId
+        // to Research/Email while a hand-off is actually running, and that
+        // work was never being spoken anyway — the point is to stop reading
+        // along with your own ears, not to hide everything happening.
+        // Falling through to the normal thread view for any other tab
+        // means that work stays fully visible during a voice session.
+        <div className="relative flex flex-1 flex-col items-center justify-center px-6 text-center">
+          <VoiceOrb />
+        </div>
+      ) : messages.length === 0 ? (
         <div className="relative flex flex-1 flex-col items-center justify-center px-6 text-center">
           <h1 className="font-[family-name:var(--font-display)] text-6xl leading-none tracking-tight text-zinc-400/70 sm:text-7xl">
             AiPX Agent

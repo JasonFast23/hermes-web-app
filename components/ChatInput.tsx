@@ -10,7 +10,6 @@ type DictationStatus = "idle" | "recording" | "transcribing" | "error";
 
 export function ChatInput() {
   const [text, setText] = useState("");
-  const [voiceOpen, setVoiceOpen] = useState(false);
   const [dictationStatus, setDictationStatus] = useState<DictationStatus>("idle");
   const [dictationError, setDictationError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -24,6 +23,8 @@ export function ChatInput() {
   const activeAgentId = useChatStore((s) => s.activeAgentId);
   const researchFastMode = useChatStore((s) => s.researchFastMode);
   const setResearchFastMode = useChatStore((s) => s.setResearchFastMode);
+  const voiceOpen = useChatStore((s) => s.voiceOpen);
+  const setVoiceOpen = useChatStore((s) => s.setVoiceOpen);
 
   // The Stop and Send/Voice buttons occupy the same spot, swapping based on
   // isStreaming. If a request finishes right as the user clicks Stop, the
@@ -45,8 +46,10 @@ export function ChatInput() {
 
     if (!trimmed) {
       if (Date.now() < suppressVoiceUntilRef.current) return;
-      // Voice always talks to Eva (jarvis) — switch to her tab so the live
-      // conversation is visible in the chat panel behind the voice bar.
+      // Voice always talks to Eva (jarvis) — switch to her tab so the
+      // session/delegation state (approval cards, activity log) it relies
+      // on is the same one voice mode operates on. ChatPanel hides the
+      // scrolling thread itself while voiceOpen is true (see there).
       setActiveAgent("jarvis");
       setVoiceOpen(true);
       return;

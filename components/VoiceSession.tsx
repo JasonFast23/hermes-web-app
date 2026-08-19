@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useChatStore } from "@/lib/store";
 import { pickRecorderMimeType, extForMimeType } from "@/lib/audio";
+import { voiceAudioLevelRef } from "@/lib/voiceAudioLevel";
 import { XIcon } from "./Icons";
 
 type Status =
@@ -90,6 +91,66 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
   // can synthesize concurrently (only playback is serialized), so this
   // must be set at hand-off time, not when a fetch happens to resolve.
   const previousSpokenTextRef = useRef("");
+  // --- Audio-reactive visual (see lib/voiceAudioLevel.ts) --------------
+  // Taps the <audio> element's actual output via a Web Audio analyser so
+  // the orb in ChatPanel can pulse with real volume, not a fake/synthetic
+  // animation. createMediaElementSource can only ever be called once per
+  // element for its whole lifetime, hence the guard in ensureAnalyser.
+  const levelAudioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const levelDataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
+  const levelRafRef = useRef<number | null>(null);
+
+  const ensureAnalyser = () => {
+    if (analyserRef.current || !audioElRef.current) return;
+    try {
+      const ctx = new AudioContext();
+      const source = ctx.createMediaElementSource(audioElRef.current);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.6; // smooths frame-to-frame jitter into a nicer pulse
+      source.connect(analyser);
+      // Required — routing the element through a MediaElementAudioSourceNode
+      // hands Web Audio control of its output; skipping this makes it silent.
+      analyser.connect(ctx.destination);
+      levelAudioContextRef.current = ctx;
+      analyserRef.current = analyser;
+      // Explicit ArrayBuffer (not the inferred ArrayBufferLike) — recent
+      // DOM typings want getByteTimeDomainData's argument backed by a real
+      // ArrayBuffer specifically.
+      levelDataRef.current = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount));
+    } catch {
+      // Web Audio unavailable/blocked — visual flair only, never let this
+      // affect actual playback, which doesn't depend on any of this.
+    }
+  };
+
+  const startLevelLoop = () => {
+    const analyser = analyserRef.current;
+    const data = levelDataRef.current;
+    if (!analyser || !data || levelRafRef.current) return;
+    const tick = () => {
+      analyser.getByteTimeDomainData(data);
+      // RMS of the waveform. Unsigned 8-bit time-domain samples sit at 128
+      // when silent, so distance from 128 is the actual signal.
+      let sumSquares = 0;
+      for (let i = 0; i < data.length; i++) {
+        const centered = (data[i] - 128) / 128;
+        sumSquares += centered * centered;
+      }
+      const rms = Math.sqrt(sumSquares / data.length);
+      voiceAudioLevelRef.current = Math.min(1, rms * 4); // raw RMS reads low — scaled up for a visible pulse
+      levelRafRef.current = requestAnimationFrame(tick);
+    };
+    tick();
+  };
+
+  const stopLevelLoop = () => {
+    if (levelRafRef.current) cancelAnimationFrame(levelRafRef.current);
+    levelRafRef.current = null;
+    voiceAudioLevelRef.current = 0;
+  };
+  // ----------------------------------------------------------------------
   // --- Timing diagnostics ---------------------------------------------
   // Temporary instrumentation to find out exactly where the perceived
   // "gap between sentences" comes from: LLM generation, the TTS round
@@ -108,6 +169,8 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
   };
   // ----------------------------------------------------------------------
   const askEva = useChatStore((s) => s.askEva);
+  const approveDelegation = useChatStore((s) => s.approveDelegation);
+  const setVoiceApproveDelegation = useChatStore((s) => s.setVoiceApproveDelegation);
   const voiceVolume = useChatStore((s) => s.voiceVolume);
 
   // Keep the currently-playing (or about-to-play) clip in sync if the
@@ -239,6 +302,7 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
       if (signal.aborted) return;
       mark("sentence detected", { text: sentence.slice(0, 60) });
       setStatus("speaking");
+      startLevelLoop();
       enqueueSpeech(sentence, signal);
     });
 
@@ -252,25 +316,34 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
         return;
       }
       sniff += delta;
+      // Compared against a leading-whitespace-trimmed view of what's
+      // arrived so far, not the raw buffer — a lone leading space or
+      // newline before the marker (a plausible, benign streaming
+      // artifact) would otherwise fail the very first character of the
+      // prefix check and permanently resolve "not delegating" before the
+      // real marker text ever arrived, which is exactly what let a raw
+      // [[DELEGATE:...]] line slip through and get spoken. `sniff` itself
+      // (untrimmed) is still what's pushed to speech once resolved
+      // not-delegating, so no real leading whitespace is ever lost.
+      const probe = sniff.trimStart();
+      if (probe.length === 0) return; // nothing but whitespace so far — keep buffering
       // Streamed chunks aren't guaranteed to arrive one character at a
       // time — a single delta can easily carry the whole marker line (or
       // a whole ordinary sentence) at once, so the "still ambiguous"
-      // check only makes sense while sniff is still shorter than the
+      // check only makes sense while probe is still shorter than the
       // prefix. Once it's at least as long, decide for real by checking
-      // sniff itself, not the other way around (DELEGATE_PREFIX.startsWith
-      // (sniff) silently stops being meaningful past that point, since a
-      // short string can never "start with" a longer one — that was the
-      // bug: any delta large enough to overshoot 11 chars in one go fell
-      // through as if it were ordinary speech).
-      if (sniff.length < DELEGATE_PREFIX.length) {
-        if (DELEGATE_PREFIX.startsWith(sniff)) return; // still ambiguous — need more
+      // probe itself, not the other way around (DELEGATE_PREFIX.startsWith
+      // (probe) silently stops being meaningful past that point, since a
+      // short string can never "start with" a longer one).
+      if (probe.length < DELEGATE_PREFIX.length) {
+        if (DELEGATE_PREFIX.startsWith(probe)) return; // still ambiguous — need more
         resolved = true;
         isDelegating = false;
         chunker.push(sniff);
         return;
       }
       resolved = true;
-      isDelegating = sniff.startsWith(DELEGATE_PREFIX);
+      isDelegating = probe.startsWith(DELEGATE_PREFIX);
       if (!isDelegating) chunker.push(sniff);
     };
 
@@ -316,17 +389,61 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
       flush();
 
       await speechChainRef.current;
+      stopLevelLoop();
       mark("turn done (all audio finished playing)");
       if (!controller.signal.aborted) setStatus("idle");
     } catch (err) {
       if (controller.signal.aborted) return;
+      stopLevelLoop();
       setErrorMessage(err instanceof Error ? err.message : "Something went wrong");
       setStatus("error");
     }
   };
 
+  // Mirrors the tail of processTurn (turn-state reset, speakStreamed,
+  // await playback, idle) but for the Approve click on a delegation Eva
+  // proposed mid-voice-session: PendingDelegationCard.tsx has no access to
+  // this component's speech pipeline, so it calls this via the store's
+  // voiceApproveDelegation (registered below) instead of the plain
+  // approveDelegation action, which only ever updated text state.
+  const speakDelegationResult = async () => {
+    const controller = new AbortController();
+    abortRef.current = controller;
+    speechChainRef.current = Promise.resolve();
+    previousSpokenTextRef.current = "";
+    turnStartRef.current = performance.now();
+    sentenceIndexRef.current = 0;
+    lastPlaybackEndRef.current = 0;
+    mark("delegation approved (voice)");
+
+    try {
+      setStatus("thinking");
+      const { onDelta, flush } = speakStreamed(controller.signal);
+      await approveDelegation(onDelta);
+      flush();
+      await speechChainRef.current;
+      stopLevelLoop();
+      mark("delegation relay done (all audio finished playing)");
+      if (!controller.signal.aborted) setStatus("idle");
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      stopLevelLoop();
+      setErrorMessage(err instanceof Error ? err.message : "Something went wrong");
+      setStatus("error");
+    }
+  };
+
+  useEffect(() => {
+    setVoiceApproveDelegation(speakDelegationResult);
+    return () => setVoiceApproveDelegation(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const startRecording = async () => {
     setErrorMessage(null);
+    // Tied to this same click's call stack (before any await) so the
+    // browser treats AudioContext creation as user-gesture-initiated.
+    ensureAnalyser();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       micStreamRef.current = stream;
@@ -388,6 +505,7 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
     }
     revokeObjectUrl();
     speechChainRef.current = Promise.resolve();
+    stopLevelLoop();
 
     void startRecording();
   };
@@ -421,6 +539,9 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
       audioElRef.current.src = "";
     }
     revokeObjectUrl();
+    stopLevelLoop();
+    levelAudioContextRef.current?.close().catch(() => {});
+    levelAudioContextRef.current = null;
 
     onClose();
   };
@@ -432,6 +553,8 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
         recorderRef.current?.stop();
         micStreamRef.current?.getTracks().forEach((t) => t.stop());
         revokeObjectUrl();
+        stopLevelLoop();
+        levelAudioContextRef.current?.close().catch(() => {});
       }
     };
   }, []);

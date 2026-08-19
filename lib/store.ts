@@ -137,10 +137,19 @@ interface ChatState {
   // default each load rather than silently staying in a mode the user
   // picked once and may not remember is still on.
   researchFastMode: boolean;
+  // Lifted out of ChatInput (rather than local component state) so
+  // ChatPanel can also read it — while a voice session is open, the panel
+  // shows a plain "listening" view instead of the scrolling message
+  // thread, since reading along while also hearing it defeats the point
+  // of a voice conversation. Never persisted — a voice session doesn't
+  // survive a reload anyway (ChatInput tears down the mic/recorder on
+  // unmount).
+  voiceOpen: boolean;
 
   setActiveAgent: (id: AgentId) => void;
   setView: (view: "chat" | "sessions") => void;
   setResearchFastMode: (fast: boolean) => void;
+  setVoiceOpen: (open: boolean) => void;
   startNewSession: () => void;
   switchSession: (sessionId: string) => void;
   openSearchResult: (sessionId: string, agentId: AgentId, messageId: string, query: string) => void;
@@ -161,11 +170,18 @@ interface ChatState {
     onToolEvent?: (event: ToolProgressPayload) => void,
     onDelta?: (chunk: string) => void
   ) => Promise<string>;
-  approveDelegation: () => Promise<void>;
+  approveDelegation: (onDelta?: (chunk: string) => void) => Promise<void>;
   declineDelegation: () => void;
   toggleSidebar: () => void;
   setVoiceVolume: (volume: number) => void;
   stopStreaming: () => void;
+  // Registered by VoiceSession while a voice session is open (null
+  // otherwise) so PendingDelegationCard's Approve button can route Eva's
+  // post-delegation reply through the same speech pipeline a normal voice
+  // turn uses, instead of silently landing only in her text thread. See
+  // the comment on approveDelegation's onDelta param for why this exists.
+  voiceApproveDelegation: (() => Promise<void>) | null;
+  setVoiceApproveDelegation: (fn: (() => Promise<void>) | null) => void;
 }
 
 // Only Eva (jarvis) ever emits a line like "[[DELEGATE:email]] draft a
@@ -674,7 +690,8 @@ export const useChatStore = create<ChatState>()(
       const runEvaAfterDelegation = async (
         sessionId: string,
         onToolEvent: ((event: ToolProgressPayload) => void) | undefined,
-        hopsLeft: number
+        hopsLeft: number,
+        onDelta?: (chunk: string) => void
       ): Promise<string> => {
         const session = get().sessions.find((s) => s.id === sessionId);
 
@@ -682,7 +699,16 @@ export const useChatStore = create<ChatState>()(
         appendMessages(sessionId, "jarvis", [assistantMessage]);
         set({ activeAgentId: "jarvis", view: "chat" });
 
-        const appendToAssistant = (chunk: string) => appendToMessage(sessionId, "jarvis", assistantMessage.id, chunk);
+        // Mirrors askEva's appendToAssistant (lib/store.ts, askEva below):
+        // onDelta is how a voice session's TTS chunker hears Eva's reply as
+        // it streams. Without this forward, her relay of a delegated
+        // agent's findings only ever reached appendToMessage — it landed in
+        // her text thread but was never spoken, which is why voice mode
+        // went silent right after a delegation was approved.
+        const appendToAssistant = (chunk: string) => {
+          appendToMessage(sessionId, "jarvis", assistantMessage.id, chunk);
+          onDelta?.(chunk);
+        };
         const handleToolEvent = (event: ToolProgressPayload) => {
           updateToolEvent(sessionId, "jarvis", assistantMessage.id, event);
           onToolEvent?.(event);
@@ -749,11 +775,13 @@ export const useChatStore = create<ChatState>()(
         view: "chat",
         voiceVolume: 1,
         researchFastMode: false,
+        voiceOpen: false,
 
         setActiveAgent: (id) => set({ activeAgentId: id, view: "chat" }),
         setView: (view) => set({ view }),
         setVoiceVolume: (volume) => set({ voiceVolume: Math.min(1, Math.max(0, volume)) }),
         setResearchFastMode: (fast) => set({ researchFastMode: fast }),
+        setVoiceOpen: (open) => set({ voiceOpen: open }),
 
         startNewSession: () => {
           // Don't create a session record yet — just clear the active
@@ -821,7 +849,7 @@ export const useChatStore = create<ChatState>()(
         // processDelegateMarker again, which parks a new pendingDelegation
         // rather than auto-continuing, so a chain still needs one approval
         // per hop.
-        approveDelegation: async () => {
+        approveDelegation: async (onDelta) => {
           const pending = get().pendingDelegation;
           if (!pending) return;
           set({ pendingDelegation: null, isStreaming: true });
@@ -834,13 +862,16 @@ export const useChatStore = create<ChatState>()(
               pending.onToolEvent,
               pending.researchMode
             );
-            await runEvaAfterDelegation(pending.sessionId, pending.onToolEvent, pending.hopsLeft);
+            await runEvaAfterDelegation(pending.sessionId, pending.onToolEvent, pending.hopsLeft, onDelta);
           } finally {
             set({ isStreaming: false });
           }
         },
 
         declineDelegation: () => set({ pendingDelegation: null }),
+
+        voiceApproveDelegation: null,
+        setVoiceApproveDelegation: (fn) => set({ voiceApproveDelegation: fn }),
 
         sendMessage: async (text) => {
           const trimmed = text.trim();
