@@ -4,12 +4,18 @@ import { useEffect, useState, type ReactNode } from "react";
 import { ChatMessage, ToolEvent, friendlyToolLabel, useChatStore } from "@/lib/store";
 import { FileIcon } from "./Icons";
 
-const REVEAL_INTERVAL_MS = 12;
-const REVEAL_CHARS_PER_TICK = 2;
-// If a big chunk lands at once (e.g. a delegated report-back posted as one
-// finished block instead of streamed token-by-token), catch up faster than
-// the default per-tick rate so it doesn't take forever to unwrap.
-const CATCH_UP_THRESHOLD = 60;
+// A steady, constant reveal pace — deliberately no "catch up faster when a
+// backlog builds up" behavior. The model can generate a long research
+// answer far faster than anyone reads it (measured ~150 tokens/sec against
+// the real backend), so a catch-up burst just means the animation looks
+// like it stalls, then dumps a paragraph at once — which is exactly the
+// "did it just freeze" feeling this is meant to avoid. Revealing at one
+// unwavering rate instead means a long answer takes a bit longer to
+// finish appearing on screen than the network took to deliver it, which
+// is the intended trade — that's what makes it read as being written in
+// front of you instead of pasted in.
+const REVEAL_INTERVAL_MS = 16;
+const REVEAL_CHARS_PER_TICK = 3;
 
 const URL_PATTERN = /https?:\/\/[^\s<>"')\]]+/g;
 const TRAILING_PUNCTUATION = /[.,;:!?)\]}'"]+$/;
@@ -225,9 +231,7 @@ export function MessageBubble({
           clearInterval(id);
           return len;
         }
-        const remaining = target - len;
-        const step = remaining > CATCH_UP_THRESHOLD ? Math.ceil(remaining / 20) : REVEAL_CHARS_PER_TICK;
-        return Math.min(target, len + step);
+        return Math.min(target, len + REVEAL_CHARS_PER_TICK);
       });
     }, REVEAL_INTERVAL_MS);
 

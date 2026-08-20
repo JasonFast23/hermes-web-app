@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { AGENTS, ENABLED_AGENT_IDS } from "@/lib/agents";
 import { ChatSession, useChatStore } from "@/lib/store";
-import { AgentsIcon, MessagingIcon, PanelToggleIcon, PlusIcon, TrashIcon } from "./Icons";
+import { AboutModal } from "./AboutModal";
+import { AgentsIcon, InfoIcon, MessagingIcon, PanelToggleIcon, PlusIcon, TrashIcon } from "./Icons";
 
 const AGENT_ORDER = ENABLED_AGENT_IDS;
 
@@ -81,14 +82,16 @@ function CollapsedRail({
   startNewSession,
   view,
   setView,
+  onOpenAbout,
 }: {
   toggleSidebar: () => void;
   startNewSession: () => void;
   view: "chat" | "sessions";
   setView: (view: "chat" | "sessions") => void;
+  onOpenAbout: () => void;
 }) {
   return (
-    <div className="flex w-14 flex-col items-center gap-1 py-3">
+    <div className="flex h-full w-14 flex-col items-center py-3">
       <button
         type="button"
         aria-label="Expand sidebar"
@@ -117,6 +120,15 @@ function CollapsedRail({
       >
         <MessagingIcon className="h-[18px] w-[18px]" />
       </button>
+      <button
+        type="button"
+        aria-label="About"
+        title="About"
+        onClick={onOpenAbout}
+        className="mt-auto flex h-9 w-9 items-center justify-center rounded-md text-zinc-400 hover:bg-black/[0.05] hover:text-zinc-600"
+      >
+        <InfoIcon className="h-[18px] w-[18px]" />
+      </button>
     </div>
   );
 }
@@ -129,6 +141,7 @@ export function Sidebar() {
   const startNewSession = useChatStore((s) => s.startNewSession);
   const view = useChatStore((s) => s.view);
   const setView = useChatStore((s) => s.setView);
+  const [aboutOpen, setAboutOpen] = useState(false);
 
   return (
     <aside
@@ -136,12 +149,14 @@ export function Sidebar() {
         collapsed ? "w-14" : "w-[260px]"
       }`}
     >
+      {aboutOpen && <AboutModal onClose={() => setAboutOpen(false)} />}
       {collapsed ? (
         <CollapsedRail
           toggleSidebar={toggleSidebar}
           startNewSession={startNewSession}
           view={view}
           setView={setView}
+          onOpenAbout={() => setAboutOpen(true)}
         />
       ) : (
         <div className="flex w-[260px] shrink-0 flex-col">
@@ -214,6 +229,17 @@ export function Sidebar() {
 
             <SessionStack />
           </nav>
+
+          <div className="border-t border-black/[0.06] p-3 pt-2">
+            <button
+              type="button"
+              onClick={() => setAboutOpen(true)}
+              className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-400 transition-colors hover:bg-black/[0.04] hover:text-zinc-600"
+            >
+              <InfoIcon className="h-[16px] w-[16px] shrink-0" />
+              <span>About</span>
+            </button>
+          </div>
         </div>
       )}
     </aside>

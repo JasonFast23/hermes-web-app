@@ -266,7 +266,13 @@ function buildAgentActivityContext(session: ChatSession | undefined): string | u
   const lines = Array.from(latestByAgent.values()).map((e) => {
     const name = AGENTS[e.agentId].name;
     const isTruncated = e.summary.length > AGENT_ACTIVITY_EXCERPT_CHARS;
-    const excerpt = isTruncated ? `${e.summary.slice(0, AGENT_ACTIVITY_EXCERPT_CHARS)}…` : e.summary;
+    // Keep the TAIL, not the head — Research's reply can now open with a
+    // run of brief "found X, checking Y next" notes (see
+    // RESEARCH_DEEP_MODE_CONTEXT) before its actual structured answer at
+    // the end. Truncating from the front would hand Eva only those
+    // in-progress notes and cut off before the real conclusion ever
+    // arrives, which is worse than not truncating at all.
+    const excerpt = isTruncated ? `…${e.summary.slice(-AGENT_ACTIVITY_EXCERPT_CHARS)}` : e.summary;
     return `${name}: ${excerpt}${isTruncated ? ` [excerpt — full report in the ${name} tab]` : ""}`;
   });
 
@@ -347,7 +353,20 @@ const RESEARCH_FAST_MODE_CONTEXT =
   "answer plus just enough context to make it useful, the way an AI " +
   "Overview reads, not a research brief. Skip exhaustive caveat lists. " +
   "Still ground it in something real and cite that source. If they want " +
-  "more depth after this, they'll ask — don't pre-empt that here.";
+  "more depth after this, they'll ask — don't pre-empt that here. If " +
+  "this ends up taking more than one search, the moment a search or " +
+  "page gives you a real fact or number, state it plainly right then, " +
+  "in your normal reply, bolding that specific fact the same way your " +
+  "final answer does — 'It shipped **June 9**.' Only write something " +
+  "when you actually have a fact to report. Never narrate the process " +
+  "itself — not what you're about to search for, not that a source " +
+  "looked stale or inconsistent, not that you're cross-checking or re-" +
+  "fetching something. That's all invisible, silent work; resolve it " +
+  "and report only the fact that comes out the other end. If a search " +
+  "or page turns up nothing usable, don't mention that either — just " +
+  "move on to the next one. Then still close with the full direct-" +
+  "answer format described below, pulling together everything you " +
+  "found.";
 
 // The counterpart to RESEARCH_FAST_MODE_CONTEXT, sent when Deep is
 // selected — makes the toggle's other state an explicit, deliberate
@@ -362,7 +381,24 @@ const RESEARCH_DEEP_MODE_CONTEXT =
   "checks as you judge the question actually needs to be confident in " +
   "a well-grounded answer. There's no source-count cap and no rush; " +
   "verify claims against multiple sources where it matters rather than " +
-  "settling for the first result.";
+  "settling for the first result. As you go, the moment a search or " +
+  "page gives you a real fact, number, or answer to part of the " +
+  "question, state it plainly right then, in your normal reply, " +
+  "bolding that specific fact the same way your final answer does — " +
+  "'Attendance was **48,000**.' Only write something when you actually " +
+  "have a fact to report; this is what lets someone watching see real " +
+  "answers surface as you go, not a transcript of your search terms. " +
+  "Never narrate the process itself — not what you're about to look " +
+  "up, not that a source looked stale, conflicting, or broken, not " +
+  "that you're cross-checking or re-fetching something to be sure. All " +
+  "of that is invisible, silent work — resolve it yourself and report " +
+  "only the fact that comes out the other end, once you actually trust " +
+  "it. If a search or page turns up nothing usable, don't mention that " +
+  "either — just move on to the next one. Once research is actually " +
+  "done, still close with the full direct-answer format described " +
+  "below (bolded key fact plus supporting detail), pulling together " +
+  "everything you found — the interim answers lead up to that, they " +
+  "don't replace it.";
 
 function combineContext(...parts: Array<string | undefined>): string | undefined {
   const joined = parts.filter((p): p is string => !!p).join("\n\n");
