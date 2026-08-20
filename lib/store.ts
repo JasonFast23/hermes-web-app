@@ -133,9 +133,13 @@ interface ChatState {
   voiceVolume: number;
   // When true, a direct message to the Research agent asks for a quick,
   // single-answer overview (like a search engine's AI Overview) instead of
-  // the default multi-source dig. Never persisted — resets to the thorough
-  // default each load rather than silently staying in a mode the user
-  // picked once and may not remember is still on.
+  // the thorough multi-source dig. Defaults true and is never persisted —
+  // every new chat starts on Fast, and only switches to Deep for messages
+  // sent within a session where it was explicitly toggled on. The previous
+  // behavior (defaulting to Deep, silently, on every load) was the actual
+  // cause of Fast/Deep feeling like it "gets mixed up": toggling to Fast
+  // never stuck past a reload, so a chat that looked set to Fast was
+  // quietly running Deep again.
   researchFastMode: boolean;
   // Lifted out of ChatInput (rather than local component state) so
   // ChatPanel can also read it — while a voice session is open, the panel
@@ -145,6 +149,12 @@ interface ChatState {
   // survive a reload anyway (ChatInput tears down the mic/recorder on
   // unmount).
   voiceOpen: boolean;
+  // Preferred mic/speaker, by deviceId — null means "system default".
+  // Persisted so a device picked once (e.g. after the exact problem that
+  // prompted this: a working mic that wasn't the OS's selected default)
+  // stays picked across reloads instead of silently reverting.
+  audioInputDeviceId: string | null;
+  audioOutputDeviceId: string | null;
 
   setActiveAgent: (id: AgentId) => void;
   setView: (view: "chat" | "sessions") => void;
@@ -174,6 +184,8 @@ interface ChatState {
   declineDelegation: () => void;
   toggleSidebar: () => void;
   setVoiceVolume: (volume: number) => void;
+  setAudioInputDeviceId: (deviceId: string | null) => void;
+  setAudioOutputDeviceId: (deviceId: string | null) => void;
   stopStreaming: () => void;
   // Registered by VoiceSession while a voice session is open (null
   // otherwise) so PendingDelegationCard's Approve button can route Eva's
@@ -643,7 +655,13 @@ export const useChatStore = create<ChatState>()(
         if (!match || hopsLeft <= 0) return fullText.trim();
 
         const target = DELEGATE_TARGETS[match[1]];
-        const researchMode = match[2] === "deep" ? "deep" : "fast";
+        // Eva's own delegation never runs deep research — that's reserved
+        // for the user's manual Fast/Deep toggle on the Research tab (see
+        // researchFastMode below), never something she chooses on their
+        // behalf. Ignores match[2] (a stray ":deep" suffix, if the model
+        // ever emits one despite the system prompt no longer describing
+        // it) rather than trusting it.
+        const researchMode = "fast";
         const task = match[3].trim();
         if (!target || !task || target === agentId) return fullText.trim();
 
@@ -774,29 +792,47 @@ export const useChatStore = create<ChatState>()(
         sidebarCollapsed: false,
         view: "chat",
         voiceVolume: 1,
-        researchFastMode: false,
+        researchFastMode: true,
         voiceOpen: false,
+        audioInputDeviceId: null,
+        audioOutputDeviceId: null,
 
         setActiveAgent: (id) => set({ activeAgentId: id, view: "chat" }),
         setView: (view) => set({ view }),
         setVoiceVolume: (volume) => set({ voiceVolume: Math.min(1, Math.max(0, volume)) }),
         setResearchFastMode: (fast) => set({ researchFastMode: fast }),
         setVoiceOpen: (open) => set({ voiceOpen: open }),
+        setAudioInputDeviceId: (deviceId) => set({ audioInputDeviceId: deviceId }),
+        setAudioOutputDeviceId: (deviceId) => set({ audioOutputDeviceId: deviceId }),
 
         startNewSession: () => {
           // Don't create a session record yet — just clear the active
           // selection so the panel shows a blank slate. A real session is
           // only added to the list (via ensureActiveSession) once the user
           // actually sends a first message, matching Claude's "New chat".
-          set({ activeSessionId: null, view: "chat", pendingDelegation: null, scrollToMessage: null });
+          // researchFastMode resets here too (see its own comment) — Deep
+          // is only ever something explicitly switched on within a given
+          // conversation, never something that should follow you into a
+          // new one. activeAgentId resets to Eva so a new chat always
+          // starts on the manager tab, not wherever you last happened to
+          // be (e.g. left on Research or Email from the previous session).
+          set({
+            activeSessionId: null,
+            activeAgentId: DEFAULT_AGENT_ID,
+            view: "chat",
+            pendingDelegation: null,
+            scrollToMessage: null,
+            researchFastMode: true,
+          });
         },
 
         switchSession: (sessionId) => {
           if (!get().sessions.some((s) => s.id === sessionId)) return;
           // A pending approval (or search-result scroll target) belongs to
           // the session that raised it — don't let it linger and fire out
-          // of context after switching.
-          set({ activeSessionId: sessionId, view: "chat", pendingDelegation: null, scrollToMessage: null });
+          // of context after switching. Same for researchFastMode: see
+          // startNewSession's comment just above.
+          set({ activeSessionId: sessionId, view: "chat", pendingDelegation: null, scrollToMessage: null, researchFastMode: true });
         },
 
         // Used by the Chats search results: jump straight to the session,
@@ -1109,6 +1145,8 @@ export const useChatStore = create<ChatState>()(
         activeAgentId: DEFAULT_AGENT_ID,
         sidebarCollapsed: false,
         voiceVolume: 1,
+        audioInputDeviceId: null,
+        audioOutputDeviceId: null,
       }),
       partialize: (state) => ({
         sessions: state.sessions,
@@ -1116,6 +1154,8 @@ export const useChatStore = create<ChatState>()(
         activeAgentId: state.activeAgentId,
         sidebarCollapsed: state.sidebarCollapsed,
         voiceVolume: state.voiceVolume,
+        audioInputDeviceId: state.audioInputDeviceId,
+        audioOutputDeviceId: state.audioOutputDeviceId,
       }),
       // A browser that persisted activeAgentId before Case File was
       // disabled (e.g. "rag") would otherwise silently keep driving the

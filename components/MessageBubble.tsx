@@ -249,6 +249,14 @@ export function MessageBubble({
     }
     return acc;
   }, []);
+  // A running tool's own row already pulses (see below), so the dots would
+  // be a redundant second animation stacked on top of it. But the moment
+  // nothing is actively running — before the first tool call, in the gap
+  // between two calls, or after the last one while the model writes its
+  // final answer — every row goes still and nothing on screen moves at
+  // all, which is exactly what reads as "frozen." Keep the dots up for
+  // all of those gaps, not just the very first one.
+  const hasRunningTool = toolEvents.some((e) => e.status === "running");
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -279,8 +287,12 @@ export function MessageBubble({
 
         {visibleContent
           ? renderContent(visibleContent, highlightQuery, glow)
-          : toolEvents.length === 0 && (
-              <span className="inline-block animate-pulse text-zinc-400">▍</span>
+          : !hasRunningTool && (
+              <span className="inline-flex items-center gap-1 py-1" aria-label="Thinking">
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-400 [animation-delay:-0.3s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-400 [animation-delay:-0.15s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-400" />
+              </span>
             )}
       </div>
     </div>

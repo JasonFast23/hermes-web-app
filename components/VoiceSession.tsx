@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useChatStore } from "@/lib/store";
 import { pickRecorderMimeType, extForMimeType } from "@/lib/audio";
+import { getUserMediaWithFallback, applyAudioOutput } from "@/lib/audioDevices";
 import { voiceAudioLevelRef } from "@/lib/voiceAudioLevel";
 import { XIcon } from "./Icons";
 
@@ -172,6 +173,8 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
   const approveDelegation = useChatStore((s) => s.approveDelegation);
   const setVoiceApproveDelegation = useChatStore((s) => s.setVoiceApproveDelegation);
   const voiceVolume = useChatStore((s) => s.voiceVolume);
+  const audioInputDeviceId = useChatStore((s) => s.audioInputDeviceId);
+  const audioOutputDeviceId = useChatStore((s) => s.audioOutputDeviceId);
 
   // Keep the currently-playing (or about-to-play) clip in sync if the
   // volume slider is adjusted mid-speech, not just on the next clip.
@@ -179,9 +182,15 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
     if (audioElRef.current) audioElRef.current.volume = voiceVolume;
   }, [voiceVolume]);
 
+  // Same idea for the chosen output device — applies to whatever clip is
+  // current/next, not just ones started after a change in Settings.
+  useEffect(() => {
+    void applyAudioOutput(audioElRef.current, audioOutputDeviceId);
+  }, [audioOutputDeviceId]);
+
   const probeMic = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await getUserMediaWithFallback(audioInputDeviceId);
       stream.getTracks().forEach((t) => t.stop());
       setStatus("idle");
     } catch (err) {
@@ -445,7 +454,7 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
     // browser treats AudioContext creation as user-gesture-initiated.
     ensureAnalyser();
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await getUserMediaWithFallback(audioInputDeviceId);
       micStreamRef.current = stream;
 
       const mimeType = pickRecorderMimeType();

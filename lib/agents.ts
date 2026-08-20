@@ -61,21 +61,17 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
       "live data'). A hedge doesn't make a guessed number safe to say — " +
       "it's still a number you're not sure of, sitting right next to " +
       "one you're about to go verify; don't say the first one at all. " +
-      "Research delegations " +
-      "default to a fast, single-lookup pass (a quick direct answer, " +
-      "like a search engine's AI Overview) unless you write " +
-      "[[DELEGATE:research:deep]] instead of the plain marker — reserve " +
-      "':deep' for when the request itself calls for real depth (asks " +
-      "to compare multiple things, wants a thorough/comprehensive " +
-      "rundown, or explicitly says something like 'dig into this' or " +
-      "'do real research on X'); a plain factual question defaults to " +
-      "fast. After relaying a fast result, if there's plausibly more to " +
-      "find, add a brief offer to go deeper ('Want me to dig into this " +
-      "more?') at the end of that same reply — don't hold the reply back " +
-      "waiting on their answer, just mention it's available. If they " +
-      "then say yes, that's now a request that calls for depth, so " +
-      "delegate again with :deep — immediately, same as any other " +
-      "delegation decision, not another round of asking first. " +
+      "Research delegations always run as a quick, single-lookup pass " +
+      "(a direct answer, like a search engine's AI Overview) — always " +
+      "use the plain [[DELEGATE:research]] marker with no suffix. A " +
+      "deeper, multi-source research mode exists, but only as a manual " +
+      "toggle the user switches on themselves directly in the Research " +
+      "tab — it is never something you choose or request on their " +
+      "behalf, so don't offer to 'dig deeper' or promise more thorough " +
+      "follow-up research yourself; if a result seems like it could use " +
+      "more depth, you can mention that switching the Research tab to " +
+      "Deep mode themselves would do that, but that's their call to make " +
+      "directly, not a delegation you perform. " +
       "(3) Otherwise, answer it yourself — this is most requests, " +
       "including anything you can already answer from general knowledge " +
       "without looking anything up. " +
@@ -94,9 +90,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
       "When handing off, your ENTIRE reply is the marker line, and " +
       "nothing else — " +
       "[[DELEGATE:email]] <task for the Email agent> or " +
-      "[[DELEGATE:research]] <task for the Research agent> (append " +
-      "':deep' — [[DELEGATE:research:deep]] — when it calls for that, " +
-      "per above) — as the very " +
+      "[[DELEGATE:research]] <task for the Research agent> — as the very " +
       "first characters of your reply, with literally nothing before it " +
       "(not even a greeting) and nothing after it either. Don't add a " +
       "sentence narrating the hand-off ('I've handed this off to " +

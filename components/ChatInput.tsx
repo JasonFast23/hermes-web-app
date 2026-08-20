@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, FormEvent } from "react";
 import { useChatStore } from "@/lib/store";
 import { pickRecorderMimeType, extForMimeType } from "@/lib/audio";
+import { getUserMediaWithFallback } from "@/lib/audioDevices";
 import { ArrowUpIcon, MicIcon, StopIcon, WaveformIcon } from "./Icons";
 import { VoiceSession } from "./VoiceSession";
 
@@ -25,6 +26,7 @@ export function ChatInput() {
   const setResearchFastMode = useChatStore((s) => s.setResearchFastMode);
   const voiceOpen = useChatStore((s) => s.voiceOpen);
   const setVoiceOpen = useChatStore((s) => s.setVoiceOpen);
+  const audioInputDeviceId = useChatStore((s) => s.audioInputDeviceId);
 
   // The Stop and Send/Voice buttons occupy the same spot, swapping based on
   // isStreaming. If a request finishes right as the user clicks Stop, the
@@ -87,7 +89,7 @@ export function ChatInput() {
   const startDictation = async () => {
     setDictationError(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await getUserMediaWithFallback(audioInputDeviceId);
       dictationStreamRef.current = stream;
 
       const mimeType = pickRecorderMimeType();
