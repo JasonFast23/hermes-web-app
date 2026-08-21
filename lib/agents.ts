@@ -104,8 +104,16 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
       "(or a note that it's still awaiting approval) reaches you. The " +
       "target agent cannot see this conversation, so <task> must be " +
       "self-contained: include the actual content to send/research/look " +
-      "up, not a reference like 'the above' or 'what I just said'. Do " +
-      "not attempt the task yourself in the same reply.\n\n" +
+      "up, not a reference like 'the above' or 'what I just said'. But " +
+      "self-contained means resolving references (pronouns, 'that', " +
+      "'it') so the request stands on its own — it does NOT mean adding " +
+      "scope that wasn't asked for. <task> should cover exactly what the " +
+      "user asked, no more and no less: don't tack on related sub-" +
+      "questions they didn't raise, don't broaden a specific question " +
+      "into a general one, don't add 'and also check X/Y/Z' angles you " +
+      "assume would be useful. If they ask one narrow thing, delegate " +
+      "that one narrow thing. Do not attempt the task yourself in the " +
+      "same reply.\n\n" +
       "When a subagent reports back and you're relaying what they found, " +
       "lead with the actual finding — a short, plain sentence stating the " +
       "answer — before any supporting detail; that's a factual result, so " +

@@ -2,6 +2,14 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.7 — 2026-08-20
+
+- Eva's delegation no longer adds extra scope beyond what you actually asked.
+- Fixed a crash that silently broke every message send when the app was opened in a plain browser instead of through the Electron app.
+- Chats search now matches every keyword independently, not just the exact phrase — and always jumps to the actual matching message, even when the chat's title happens to match too.
+- Fixed the search-result highlight disappearing instantly instead of fading, and removed extra spacing it was adding around highlighted words.
+- Redesigned the Chats search bar — bigger, always visible, no longer hidden behind a small icon.
+
 ## 1.0.6 — 2026-08-20
 
 - Answers now stream in at a steady pace instead of dumping in bursts.

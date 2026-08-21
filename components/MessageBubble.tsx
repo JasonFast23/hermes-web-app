@@ -20,16 +20,26 @@ const REVEAL_CHARS_PER_TICK = 3;
 const URL_PATTERN = /https?:\/\/[^\s<>"')\]]+/g;
 const TRAILING_PUNCTUATION = /[.,;:!?)\]}'"]+$/;
 
-// Wraps every occurrence of a Chats-search query in a <mark> that starts
-// lit and fades to transparent. Applied at the innermost text-node level
-// (inside linkify/renderInline, below), never to raw unparsed content —
-// splitting raw text on the query ahead of bold/link parsing would cut a
-// "**bold**" pair in half whenever a match fell inside it, leaving literal
-// asterisks with no partner to complete the pair.
+// Wraps every occurrence of any word from a Chats-search query in a <mark>
+// that starts lit and fades to transparent. Matches per-keyword, same as
+// the search itself (SessionListView) — a query can match a session with
+// its words spread across different messages, so highlighting only the
+// literal full phrase here could land on the right message and still show
+// no highlight at all if that exact phrase never appears verbatim.
+// Applied at the innermost text-node level (inside linkify/renderInline,
+// below), never to raw unparsed content — splitting raw text on the query
+// ahead of bold/link parsing would cut a "**bold**" pair in half whenever a
+// match fell inside it, leaving literal asterisks with no partner to
+// complete the pair.
 function highlightText(text: string, query: string | undefined, glow: boolean, keyPrefix: string): ReactNode[] {
   if (!query) return [text];
-  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const parts = text.split(new RegExp(`(${escaped})`, "ig"));
+  const keywords = query
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (keywords.length === 0) return [text];
+  const parts = text.split(new RegExp(`(${keywords.join("|")})`, "ig"));
   const nodes: ReactNode[] = [];
 
   parts.forEach((part, i) => {
@@ -38,7 +48,7 @@ function highlightText(text: string, query: string | undefined, glow: boolean, k
       nodes.push(
         <mark
           key={`${keyPrefix}-m-${i}`}
-          className={`rounded-sm px-0.5 text-zinc-900 transition-colors duration-[1000ms] ${
+          className={`rounded-sm text-zinc-900 transition-colors duration-[1000ms] ${
             glow ? "bg-amber-300/80" : "bg-transparent"
           }`}
         >
@@ -177,8 +187,11 @@ function renderContent(text: string, highlightQuery?: string, glow?: boolean): R
   return nodes;
 }
 
-// How long the search-match highlight stays lit before fading.
+// How long the search-match highlight stays lit before fading, and how
+// long the fade-out transition itself takes (must match the <mark>'s own
+// `duration-[1000ms]` below).
 const SEARCH_GLOW_MS = 2200;
+const FADE_MS = 1000;
 
 export function MessageBubble({
   message,
@@ -206,14 +219,26 @@ export function MessageBubble({
   // if a newer highlight has since taken over: that transition already
   // remounted this instance with a fresh key, so a stale timer from an old
   // instance can't be the one firing this late.
+  //
+  // Two separate timers, not one: clearing scrollToMessage changes
+  // highlightQuery to undefined, which changes this component's key in
+  // ChatPanel and remounts it. Firing that at the same instant as
+  // setGlow(false) — as a single timer used to do — remounted the
+  // component before the CSS fade transition ever got a chance to play,
+  // so the highlight just vanished instead of fading. Waiting the fade's
+  // own duration past that point lets the animation actually run first.
+  // Mount-only (glow only ever goes true -> false once per instance, per
+  // the comment above, so there's nothing to react to on later renders).
   useEffect(() => {
     if (!glow) return;
-    const t = setTimeout(() => {
-      setGlow(false);
-      clearScrollTarget();
-    }, SEARCH_GLOW_MS);
-    return () => clearTimeout(t);
-  }, [glow, clearScrollTarget]);
+    const fadeStart = setTimeout(() => setGlow(false), SEARCH_GLOW_MS);
+    const clear = setTimeout(() => clearScrollTarget(), SEARCH_GLOW_MS + FADE_MS);
+    return () => {
+      clearTimeout(fadeStart);
+      clearTimeout(clear);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Assistant text reveals a couple characters at a time regardless of how
   // chunky the underlying network stream is. Seeded to the full length on

@@ -7,34 +7,60 @@ import { CheckIcon, PlusIcon, SearchIcon, XIcon } from "./Icons";
 
 const SNIPPET_RADIUS = 40;
 
-// Pulls a short window of text around the first match, collapsed to one
-// line, with ellipses where it was truncated — gives context without
-// dumping the whole message into the row.
-function buildSnippet(content: string, query: string): string {
+// A multi-word search is treated as "every one of these words, anywhere" —
+// not one literal phrase — matching how Slack/Gmail-style search boxes
+// behave, and how everything below (containsAllKeywords, highlighting,
+// snippets) operates on the query.
+function tokenize(query: string): string[] {
+  return query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function containsAllKeywords(text: string, keywords: string[]): boolean {
+  const lower = text.toLowerCase();
+  return keywords.every((k) => lower.includes(k));
+}
+
+// Earliest position any keyword actually occurs at, so a snippet spanning
+// several words centers on something the user searched for rather than
+// just the start of the message.
+function firstKeywordIndex(text: string, keywords: string[]): number {
+  const lower = text.toLowerCase();
+  let best = -1;
+  for (const k of keywords) {
+    const idx = lower.indexOf(k);
+    if (idx !== -1 && (best === -1 || idx < best)) best = idx;
+  }
+  return best;
+}
+
+// Pulls a short window of text around the first keyword match, collapsed
+// to one line, with ellipses where it was truncated — gives context
+// without dumping the whole message into the row.
+function buildSnippet(content: string, keywords: string[]): string {
   const flat = content.replace(/\s+/g, " ").trim();
-  const idx = flat.toLowerCase().indexOf(query.toLowerCase());
+  const idx = firstKeywordIndex(flat, keywords);
   if (idx === -1) return flat.slice(0, SNIPPET_RADIUS * 2);
 
   const start = Math.max(0, idx - SNIPPET_RADIUS);
-  const end = Math.min(flat.length, idx + query.length + SNIPPET_RADIUS);
+  const end = Math.min(flat.length, start + SNIPPET_RADIUS * 3);
   const prefix = start > 0 ? "…" : "";
   const suffix = end < flat.length ? "…" : "";
   return prefix + flat.slice(start, end) + suffix;
 }
 
-// Splits text on the (case-insensitive) query and wraps each match in
-// <mark> — relies on String.split's behavior of interleaving captured
-// groups at odd indices, so no regex .lastIndex state to worry about.
-function highlightMatches(text: string, query: string) {
-  const q = query.trim();
-  if (!q) return text;
+// Splits text on every keyword (case-insensitive, alternated into one
+// regex) and wraps each match in <mark> — relies on String.split's
+// behavior of interleaving captured groups at odd indices, so no regex
+// .lastIndex state to worry about.
+function highlightMatches(text: string, keywords: string[]) {
+  if (keywords.length === 0) return text;
 
-  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const parts = text.split(new RegExp(`(${escaped})`, "ig"));
+  const escaped = keywords.map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const parts = text.split(new RegExp(`(${escaped.join("|")})`, "ig"));
 
   return parts.map((part, i) =>
     i % 2 === 1 ? (
-      <mark key={i} className="rounded-sm bg-amber-200/70 px-0.5 text-zinc-900">
+      <mark key={i} className="rounded-sm bg-amber-200/70 text-zinc-900">
         {part}
       </mark>
     ) : (
@@ -72,48 +98,55 @@ export function SessionListView() {
   const startNewSession = useChatStore((s) => s.startNewSession);
   const deleteSessions = useChatStore((s) => s.deleteSessions);
 
-  const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selecting, setSelecting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
+  const keywords = useMemo(() => tokenize(query), [query]);
+
   const visibleSessions = useMemo(() => {
     const list = [...sessions].sort((a, b) => b.createdAt - a.createdAt);
-    if (!query.trim()) return list;
-    const q = query.trim().toLowerCase();
+    if (keywords.length === 0) return list;
     return list.filter((s) => {
-      if (s.title.toLowerCase().includes(q)) return true;
-      // Also match on message content across every agent thread in the
-      // session, not just the title — so keywords from anywhere in the
-      // conversation surface the chat, not only its (often-truncated) title.
-      return Object.values(s.threads).some((messages) =>
-        messages?.some((m) => m.content.toLowerCase().includes(q))
-      );
+      // Every keyword has to be present SOMEWHERE in the session — title
+      // or any message in any thread — but not necessarily all in the
+      // same field or as one contiguous phrase. A query like "voice bug"
+      // matches a session where "voice" is in one message and "bug" is in
+      // another, same as it would in Slack/Gmail-style search.
+      const combined = [
+        s.title,
+        ...Object.values(s.threads).flatMap((messages) => messages?.map((m) => m.content) ?? []),
+      ].join(" \n ");
+      return containsAllKeywords(combined, keywords);
     });
-  }, [sessions, query]);
+  }, [sessions, keywords]);
 
-  // For sessions whose match came from message content rather than the
-  // title, find the matching message — both for the highlighted snippet
-  // shown under the title, and so clicking the row can jump straight to
-  // that agent thread and message (openSearchResult) instead of just
-  // opening the session and leaving the user to hunt for it.
+  // Finds the single message that best represents the match — the one
+  // containing the most of the searched keywords — so the row's snippet
+  // and the click-through destination point at actual matching content,
+  // not just wherever the session happens to open by default. Always
+  // computed, even when the title itself also matched: a title match
+  // shouldn't hide a stronger, more specific hit sitting in the
+  // conversation itself.
   const matchSnippets = useMemo(() => {
-    const q = query.trim().toLowerCase();
     const map = new Map<string, { agentId: AgentId; messageId: string; content: string }>();
-    if (!q) return map;
+    if (keywords.length === 0) return map;
 
     for (const session of visibleSessions) {
-      if (session.title.toLowerCase().includes(q)) continue;
+      let best: { agentId: AgentId; messageId: string; content: string; score: number } | null = null;
       for (const [agentId, messages] of Object.entries(session.threads) as [AgentId, typeof session.threads[AgentId]][]) {
-        const hit = messages?.find((m) => m.content.toLowerCase().includes(q));
-        if (hit) {
-          map.set(session.id, { agentId, messageId: hit.id, content: hit.content });
-          break;
+        for (const m of messages ?? []) {
+          const lower = m.content.toLowerCase();
+          const score = keywords.filter((k) => lower.includes(k)).length;
+          if (score > 0 && (!best || score > best.score)) {
+            best = { agentId, messageId: m.id, content: m.content, score };
+          }
         }
       }
+      if (best) map.set(session.id, best);
     }
     return map;
-  }, [visibleSessions, query]);
+  }, [visibleSessions, keywords]);
 
   const exitSelectMode = () => {
     setSelecting(false);
@@ -186,38 +219,6 @@ export function SessionListView() {
           </div>
         ) : (
           <div className="flex items-center gap-2">
-            {searchOpen ? (
-              <div className="flex items-center gap-1.5 rounded-md border border-black/10 bg-white px-2 py-1.5">
-                <SearchIcon className="h-[15px] w-[15px] text-zinc-400" />
-                <input
-                  autoFocus
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search chats"
-                  className="w-40 bg-transparent text-[13px] text-zinc-700 outline-none placeholder:text-zinc-400"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearchOpen(false);
-                    setQuery("");
-                  }}
-                  className="flex h-5 w-5 items-center justify-center rounded text-zinc-400 hover:bg-black/[0.05]"
-                  aria-label="Close search"
-                >
-                  <XIcon className="h-3 w-3" />
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setSearchOpen(true)}
-                aria-label="Search chats"
-                className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-500 hover:bg-black/[0.05]"
-              >
-                <SearchIcon className="h-[17px] w-[17px]" />
-              </button>
-            )}
             <button
               type="button"
               onClick={() => setSelecting(true)}
@@ -235,6 +236,28 @@ export function SessionListView() {
             </button>
           </div>
         )}
+      </div>
+
+      <div className="shrink-0 px-6 pt-4">
+        <div className="flex items-center gap-2.5 rounded-full border border-black/[0.07] bg-white px-4 py-2.5 shadow-[0_1px_2px_rgba(0,0,0,0.04)] focus-within:border-black/[0.15]">
+          <SearchIcon className="h-[18px] w-[18px] shrink-0 text-zinc-400" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search chats"
+            className="w-full bg-transparent text-sm text-zinc-700 outline-none placeholder:text-zinc-400"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              aria-label="Clear search"
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:bg-black/[0.06] hover:text-zinc-600"
+            >
+              <XIcon className="h-3 w-3" />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 py-2">
@@ -264,11 +287,11 @@ export function SessionListView() {
                 )}
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[14.5px] text-zinc-800">
-                    {query ? highlightMatches(sess.title, query) : sess.title}
+                    {keywords.length > 0 ? highlightMatches(sess.title, keywords) : sess.title}
                   </span>
-                  {query && matchedContent && (
+                  {keywords.length > 0 && matchedContent && (
                     <span className="mt-0.5 block truncate text-[12.5px] text-zinc-500">
-                      {highlightMatches(buildSnippet(matchedContent.content, query), query)}
+                      {highlightMatches(buildSnippet(matchedContent.content, keywords), keywords)}
                     </span>
                   )}
                 </span>

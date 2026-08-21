@@ -222,9 +222,23 @@ const DELEGATE_MARKER = /^\[\[DELEGATE:(email|research)(?::(fast|deep))?\]\][ \t
 // forever.
 const MAX_DELEGATION_HOPS = 5;
 
+// crypto.randomUUID() only exists in a secure context (HTTPS, or
+// localhost). This app is also reachable over plain HTTP on a private
+// Tailscale IP — fine for the Electron shell, which explicitly flags that
+// origin as secure, but a normal browser hitting the same URL directly
+// has no such flag, and crypto.randomUUID is simply undefined there,
+// crashing every send. These ids are local React keys/session
+// identifiers, not security tokens, so a non-crypto fallback is fine.
+function newId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
 function createSession(): ChatSession {
   return {
-    id: crypto.randomUUID(),
+    id: newId(),
     title: "New session",
     createdAt: Date.now(),
     threads: {},
@@ -749,7 +763,7 @@ export const useChatStore = create<ChatState>()(
       ): Promise<string> => {
         const session = get().sessions.find((s) => s.id === sessionId);
 
-        const assistantMessage: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: "" };
+        const assistantMessage: ChatMessage = { id: newId(), role: "assistant", content: "" };
         appendMessages(sessionId, "jarvis", [assistantMessage]);
         set({ activeAgentId: "jarvis", view: "chat" });
 
@@ -953,8 +967,8 @@ export const useChatStore = create<ChatState>()(
           const session = ensureActiveSession();
           const sessionId = session.id;
 
-          const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content: trimmed };
-          const assistantMessage: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: "" };
+          const userMessage: ChatMessage = { id: newId(), role: "user", content: trimmed };
+          const assistantMessage: ChatMessage = { id: newId(), role: "assistant", content: "" };
 
           appendMessages(sessionId, agentId, [userMessage, assistantMessage], trimmed);
           const controller = new AbortController();
@@ -1031,8 +1045,8 @@ export const useChatStore = create<ChatState>()(
           const trimmed = task.trim();
           if (!trimmed) return "";
 
-          const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content: trimmed };
-          const assistantMessage: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: "" };
+          const userMessage: ChatMessage = { id: newId(), role: "user", content: trimmed };
+          const assistantMessage: ChatMessage = { id: newId(), role: "assistant", content: "" };
 
           appendMessages(sessionId, targetAgentId, [userMessage, assistantMessage], trimmed);
 
@@ -1123,8 +1137,8 @@ export const useChatStore = create<ChatState>()(
           const session = ensureActiveSession();
           const sessionId = session.id;
 
-          const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content: trimmed };
-          const assistantMessage: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: "" };
+          const userMessage: ChatMessage = { id: newId(), role: "user", content: trimmed };
+          const assistantMessage: ChatMessage = { id: newId(), role: "assistant", content: "" };
 
           appendMessages(sessionId, agentId, [userMessage, assistantMessage], trimmed);
 
