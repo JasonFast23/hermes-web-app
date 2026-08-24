@@ -133,9 +133,9 @@ function CollapsedRail({
         <MessagingIcon className="h-[18px] w-[18px]" />
       </button>
       <Link
-        href="/phone-test"
-        aria-label="Phone (test)"
-        title="Phone (test)"
+        href="/phone"
+        aria-label="Phone"
+        title="Phone"
         className="mt-2 flex h-9 w-9 items-center justify-center rounded-md text-zinc-500 hover:bg-black/[0.05]"
       >
         <PhoneIcon className="h-[18px] w-[18px]" />
@@ -218,12 +218,12 @@ function SidebarPanel({
           <span className="truncate">Chats</span>
         </button>
         <Link
-          href="/phone-test"
+          href="/phone"
           onClick={onNavigate}
           className="flex items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[13.5px] text-zinc-600 transition-colors hover:bg-black/[0.04]"
         >
           <PhoneIcon className="h-[18px] w-[18px] shrink-0 text-zinc-500" />
-          <span className="truncate">Phone (test)</span>
+          <span className="truncate">Phone</span>
         </Link>
 
         <div className="mt-4 flex items-center gap-3 px-2.5 py-1.5 text-[13.5px] font-medium text-zinc-500">

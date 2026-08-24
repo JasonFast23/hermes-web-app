@@ -2,6 +2,10 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.10 — 2026-08-24
+
+- The Phone tab is now a real call history — every inbound and outbound call on the Retell number, with its AI-generated summary, playable recording, and full transcript. The old browser-mic call simulator still exists, just tucked under a "Test tools" toggle instead of being the whole page.
+
 ## 1.0.9 — 2026-08-24
 
 - Fixed voice mode being dramatically slower on Android than on Mac/Windows — the screen locking mid-conversation was letting the phone throttle network activity; voice mode now keeps the screen awake for as long as it's actually in use.
