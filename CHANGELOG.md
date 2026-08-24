@@ -2,6 +2,10 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.12 — 2026-08-24
+
+- Fixed the Phone tab having no way back to the main screen — it was built as a separate page with no sidebar at all, so neither the sidebar navigation nor the mobile menu worked from there. Phone is now a view within the same app shell, like Chats already was, so the sidebar (and a normal tap back to Eva) is always there.
+
 ## 1.0.11 — 2026-08-24
 
 - Fixed the phone's hardware/gesture back button not closing a call's detail view in the Phone tab — it worked with the on-screen "← Back" link but not the device's own back navigation, since opening a call wasn't registered as a real step in browser history.

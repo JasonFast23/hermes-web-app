@@ -4,6 +4,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { ChatPanel } from "@/components/ChatPanel";
 import { TopBar } from "@/components/TopBar";
 import { SessionListView } from "@/components/SessionListView";
+import { PhoneView } from "@/components/PhoneView";
 import { useChatStore } from "@/lib/store";
 
 export default function Home() {
@@ -15,6 +16,8 @@ export default function Home() {
         <Sidebar />
         {view === "sessions" ? (
           <SessionListView />
+        ) : view === "phone" ? (
+          <PhoneView />
         ) : (
           <div className="flex min-w-0 flex-1 flex-col">
             <TopBar />

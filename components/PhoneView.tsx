@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RetellWebClient } from "retell-client-js-sdk";
 import { useChatStore } from "@/lib/store";
-import { MenuIcon, PhoneIcon } from "@/components/Icons";
+import { MenuIcon, PhoneIcon } from "./Icons";
 
 interface CallSummary {
   call_id: string;
@@ -199,7 +199,7 @@ function CallDetailPanel({ callId, onBack }: { callId: string; onBack: () => voi
 // The original browser-mic simulated-call tools — still genuinely useful
 // for testing changes to the phone bridge without spending real per-
 // minute Retell/Twilio/TTS charges or needing an actual phone, but no
-// longer the main reason this tab exists (see CallList above) now that
+// longer the main reason this tab exists (see CallRow above) now that
 // there's a real number in production use. Kept, just demoted to a
 // collapsed secondary section instead of the whole page.
 function TestTools() {
@@ -320,7 +320,7 @@ function TestTools() {
   );
 }
 
-export default function PhonePage() {
+export function PhoneView() {
   const setMobileSidebarOpen = useChatStore((s) => s.setMobileSidebarOpen);
   const [calls, setCalls] = useState<CallSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -342,15 +342,13 @@ export default function PhonePage() {
     };
   }, []);
 
-  // Opening a call is local component state, not a real route change — so
+  // Opening a call is local component state, not a route change — so
   // without this, the phone's hardware/gesture back button has no browser
-  // history entry to act on and does nothing (or leaves the page
-  // entirely), even though the on-screen "← Back" link works fine for a
-  // tap. Pushing a history entry when a call opens, and closing the
-  // detail view on popstate, makes the system back button behave exactly
-  // like the on-screen one — both end up going through this same
-  // listener, via history.back() below, so they can never fall out of
-  // sync with each other.
+  // history entry to act on, even though the on-screen "← Back" link
+  // works fine for a tap. Pushing a history entry when a call opens, and
+  // closing the detail view on popstate, makes the system back button
+  // behave exactly like the on-screen one — both funnel through
+  // history.back() below, so they can never fall out of sync.
   useEffect(() => {
     if (!selectedId) return;
     window.history.pushState({ phoneCallDetail: selectedId }, "");

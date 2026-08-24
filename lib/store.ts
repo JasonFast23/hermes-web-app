@@ -133,7 +133,7 @@ interface ChatState {
   // sidebarCollapsed (which only makes sense for the desktop rail). Never
   // persisted — a phone reload should always land closed.
   mobileSidebarOpen: boolean;
-  view: "chat" | "sessions";
+  view: "chat" | "sessions" | "phone";
   // 0 (silent) to 1 (full) — controls playback volume for Eva's spoken
   // replies in VoiceSession. Persisted like other UI preferences below.
   voiceVolume: number;
@@ -163,7 +163,7 @@ interface ChatState {
   audioOutputDeviceId: string | null;
 
   setActiveAgent: (id: AgentId) => void;
-  setView: (view: "chat" | "sessions") => void;
+  setView: (view: "chat" | "sessions" | "phone") => void;
   setResearchFastMode: (fast: boolean) => void;
   setVoiceOpen: (open: boolean) => void;
   startNewSession: () => void;

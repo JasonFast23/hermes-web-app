@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
 import { AGENTS, ENABLED_AGENT_IDS } from "@/lib/agents";
 import { ChatSession, useChatStore } from "@/lib/store";
 import { AboutModal } from "./AboutModal";
@@ -98,8 +97,8 @@ function CollapsedRail({
 }: {
   toggleSidebar: () => void;
   startNewSession: () => void;
-  view: "chat" | "sessions";
-  setView: (view: "chat" | "sessions") => void;
+  view: "chat" | "sessions" | "phone";
+  setView: (view: "chat" | "sessions" | "phone") => void;
   onOpenAbout: () => void;
 }) {
   return (
@@ -132,14 +131,17 @@ function CollapsedRail({
       >
         <MessagingIcon className="h-[18px] w-[18px]" />
       </button>
-      <Link
-        href="/phone"
+      <button
+        type="button"
         aria-label="Phone"
         title="Phone"
-        className="mt-2 flex h-9 w-9 items-center justify-center rounded-md text-zinc-500 hover:bg-black/[0.05]"
+        onClick={() => setView("phone")}
+        className={`mt-2 flex h-9 w-9 items-center justify-center rounded-md ${
+          view === "phone" ? "bg-black/[0.06] text-zinc-900" : "text-zinc-500 hover:bg-black/[0.05]"
+        }`}
       >
         <PhoneIcon className="h-[18px] w-[18px]" />
-      </Link>
+      </button>
       <button
         type="button"
         aria-label="About"
@@ -217,14 +219,21 @@ function SidebarPanel({
           <MessagingIcon className="h-[18px] w-[18px] shrink-0 text-zinc-500" />
           <span className="truncate">Chats</span>
         </button>
-        <Link
-          href="/phone"
-          onClick={onNavigate}
-          className="flex items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[13.5px] text-zinc-600 transition-colors hover:bg-black/[0.04]"
+        <button
+          type="button"
+          onClick={() => {
+            setView("phone");
+            onNavigate?.();
+          }}
+          className={`flex items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[13.5px] transition-colors ${
+            view === "phone"
+              ? "bg-black/[0.05] text-zinc-900"
+              : "text-zinc-600 hover:bg-black/[0.04]"
+          }`}
         >
           <PhoneIcon className="h-[18px] w-[18px] shrink-0 text-zinc-500" />
           <span className="truncate">Phone</span>
-        </Link>
+        </button>
 
         <div className="mt-4 flex items-center gap-3 px-2.5 py-1.5 text-[13.5px] font-medium text-zinc-500">
           <AgentsIcon className="h-[18px] w-[18px] shrink-0 text-zinc-500" />
