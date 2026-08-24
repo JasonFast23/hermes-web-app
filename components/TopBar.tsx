@@ -3,13 +3,47 @@
 import { useEffect, useRef, useState } from "react";
 import { useChatStore } from "@/lib/store";
 import { listAudioDevices } from "@/lib/audioDevices";
-import { MenuIcon, PlusIcon, SpeakerIcon, SpeakerMutedIcon } from "./Icons";
+import { MenuIcon, PlusIcon, SpeakerIcon, SpeakerMutedIcon, BellIcon, BellOffIcon } from "./Icons";
+import { isNotificationsMuted, setNotificationsMuted } from "@/lib/notifications";
 
 // Chrome/Edge only — not in TS's lib.dom types, absent on Safari/Firefox.
 // The speaker picker only makes sense to show where it can actually do
 // anything (see applyAudioOutput in lib/audioDevices.ts).
 const SUPPORTS_OUTPUT_SELECTION =
   typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
+
+function NotificationBell() {
+  const [muted, setMuted] = useState(false);
+
+  useEffect(() => {
+    // One-time read of the persisted mute flag on mount — deferred to an
+    // effect (rather than a lazy useState initializer) so the client's
+    // first render matches the server's SSR output and avoids a hydration
+    // mismatch.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMuted(isNotificationsMuted());
+  }, []);
+
+  const toggle = () => {
+    const next = !muted;
+    setNotificationsMuted(next);
+    setMuted(next);
+  };
+
+  const label = muted ? "Notifications muted — click to unmute" : "Notifications enabled — click to mute";
+
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={toggle}
+      className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-black/[0.04]"
+    >
+      {muted ? <BellOffIcon className="h-[18px] w-[18px]" /> : <BellIcon className="h-[18px] w-[18px]" />}
+    </button>
+  );
+}
 
 export function TopBar() {
   const [open, setOpen] = useState(false);
@@ -90,6 +124,8 @@ export function TopBar() {
         >
           <PlusIcon className="h-[18px] w-[18px]" />
         </button>
+
+        <NotificationBell />
 
         <button
           type="button"

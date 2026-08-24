@@ -2,6 +2,13 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.13 — 2026-08-24
+
+- Eva can now place a real phone call on your behalf — ask her to call a number for a stated purpose, approve it, and she actually dials out through the Retell line.
+- Added in-app notifications (bell icon, top bar) — when a call needs Priscilla's follow-up, a toast pops up and links straight to that call's transcript in the Phone tab, with the note highlighted.
+- Fixed the call transcript screen's "Back" button sitting under the status bar on Android, making it barely tappable.
+- Hid the Phone tab's test-call tools for now.
+
 ## 1.0.12 — 2026-08-24
 
 - Fixed the Phone tab having no way back to the main screen — it was built as a separate page with no sidebar at all, so neither the sidebar navigation nor the mobile menu worked from there. Phone is now a view within the same app shell, like Chats already was, so the sidebar (and a normal tap back to Eva) is always there.

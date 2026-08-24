@@ -17,6 +17,14 @@ interface CallSummary {
     call_summary?: string;
     user_sentiment?: string;
     call_successful?: boolean;
+    // Custom post-call-analysis field configured on the Retell agent —
+    // extracted by Retell itself from the transcript after each call, and
+    // separately relayed as a notification toast by the phone bridge's
+    // webhook handler (hermes-phone-bridge/server.js, a different
+    // project) once it's ready. Set only when Eva told the caller she'd
+    // have Priscilla follow up on something; empty/absent means nothing
+    // needs action.
+    custom_analysis_data?: { priscilla_follow_up?: string };
   };
 }
 
@@ -28,7 +36,7 @@ interface CallDetail extends CallSummary {
 // US numbers only (this whole feature is one Retell US number) — trims
 // the +1 country code so the list reads as a normal phone number instead
 // of raw E.164.
-function formatPhoneNumber(raw: string | undefined): string {
+export function formatPhoneNumber(raw: string | undefined): string {
   if (!raw) return "Unknown number";
   const digits = raw.replace(/^\+1/, "");
   const match = digits.match(/^(\d{3})(\d{3})(\d{4})$/);
@@ -57,6 +65,7 @@ function CallRow({ call, onClick }: { call: CallSummary; onClick: () => void }) 
   const isInbound = call.direction === "inbound";
   const counterpart = isInbound ? call.from_number : call.to_number;
   const summary = call.call_analysis?.call_summary;
+  const followUp = call.call_analysis?.custom_analysis_data?.priscilla_follow_up;
 
   return (
     <button
@@ -74,8 +83,15 @@ function CallRow({ call, onClick }: { call: CallSummary; onClick: () => void }) 
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-center justify-between gap-2">
-          <span className="truncate text-[14.5px] font-medium text-zinc-800">
-            {isInbound ? "Incoming call" : "Outgoing call"} — {formatPhoneNumber(counterpart)}
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-[14.5px] font-medium text-zinc-800">
+              {isInbound ? "Incoming call" : "Outgoing call"} — {formatPhoneNumber(counterpart)}
+            </span>
+            {followUp && (
+              <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                Follow-up
+              </span>
+            )}
           </span>
           <span className="shrink-0 text-[12px] text-zinc-400">{formatDateTime(call.start_timestamp)}</span>
         </span>
@@ -148,7 +164,7 @@ function CallDetailPanel({ callId, onBack }: { callId: string; onBack: () => voi
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      <div className="flex shrink-0 items-center gap-3 border-b border-black/[0.06] px-4 py-3">
+      <div className="flex shrink-0 items-center gap-3 border-b border-black/[0.06] px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)]">
         <button
           type="button"
           onClick={onBack}
@@ -174,6 +190,17 @@ function CallDetailPanel({ callId, onBack }: { callId: string; onBack: () => voi
               {formatDuration(detail.duration_ms) && <span>Duration {formatDuration(detail.duration_ms)}</span>}
               {detail.call_analysis?.user_sentiment && <span>Sentiment: {detail.call_analysis.user_sentiment}</span>}
             </div>
+
+            {detail.call_analysis?.custom_analysis_data?.priscilla_follow_up && (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <p className="text-[12px] font-medium uppercase tracking-wide text-amber-700">
+                  Note for Priscilla
+                </p>
+                <p className="mt-1 text-[13.5px] leading-relaxed text-amber-900">
+                  {detail.call_analysis.custom_analysis_data.priscilla_follow_up}
+                </p>
+              </div>
+            )}
 
             {detail.call_analysis?.call_summary && (
               <div className="rounded-2xl border border-black/[0.06] bg-white px-4 py-3">
@@ -322,10 +349,11 @@ function TestTools() {
 
 export function PhoneView() {
   const setMobileSidebarOpen = useChatStore((s) => s.setMobileSidebarOpen);
+  const pendingPhoneCallToOpen = useChatStore((s) => s.pendingPhoneCallToOpen);
+  const setPendingPhoneCallToOpen = useChatStore((s) => s.setPendingPhoneCallToOpen);
   const [calls, setCalls] = useState<CallSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [showTestTools, setShowTestTools] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -341,6 +369,16 @@ export function PhoneView() {
       cancelled = true;
     };
   }, []);
+
+  // A notification toast for a specific call was clicked (see
+  // NotificationListener) — jump straight to it instead of the list, then
+  // clear the hint so it doesn't re-trigger on a later visit to this view.
+  useEffect(() => {
+    if (!pendingPhoneCallToOpen) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelectedId(pendingPhoneCallToOpen);
+    setPendingPhoneCallToOpen(null);
+  }, [pendingPhoneCallToOpen, setPendingPhoneCallToOpen]);
 
   // Opening a call is local component state, not a route change — so
   // without this, the phone's hardware/gesture back button has no browser
@@ -370,32 +408,17 @@ export function PhoneView() {
 
   return (
     <section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#f4f6fb]">
-      <div className="flex h-14 shrink-0 items-center justify-between border-b border-black/[0.06] px-3 pt-[env(safe-area-inset-top)] sm:px-6">
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            aria-label="Open menu"
-            onClick={() => setMobileSidebarOpen(true)}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-black/[0.04] md:hidden"
-          >
-            <MenuIcon className="h-[19px] w-[19px]" />
-          </button>
-          <h1 className="text-xl font-semibold text-zinc-800">Phone</h1>
-        </div>
+      <div className="flex h-14 shrink-0 items-center gap-1 border-b border-black/[0.06] px-3 pt-[env(safe-area-inset-top)] sm:px-6">
         <button
           type="button"
-          onClick={() => setShowTestTools((v) => !v)}
-          className="rounded-md bg-zinc-200 px-3 py-1.5 text-[13px] font-medium text-zinc-700 hover:bg-zinc-300"
+          aria-label="Open menu"
+          onClick={() => setMobileSidebarOpen(true)}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-black/[0.04] md:hidden"
         >
-          {showTestTools ? "Hide test tools" : "Test tools"}
+          <MenuIcon className="h-[19px] w-[19px]" />
         </button>
+        <h1 className="text-xl font-semibold text-zinc-800">Phone</h1>
       </div>
-
-      {showTestTools && (
-        <div className="shrink-0 border-b border-black/[0.06]">
-          <TestTools />
-        </div>
-      )}
 
       <div className="flex-1 overflow-y-auto px-2 py-2">
         {error && <p className="px-4 py-8 text-center text-sm text-red-600">{error}</p>}

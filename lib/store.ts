@@ -96,6 +96,19 @@ export interface PendingDelegation {
   researchMode?: "fast" | "deep";
 }
 
+// A real outbound phone call Eva proposed — [[DELEGATE:phone]], parsed
+// out of PendingDelegation's flow separately since it isn't really a
+// hand-off to another text-generating agent (no AgentId, no /api/chat
+// call): approving it dials an actual number via Retell. sessionId is
+// still needed so the confirmation message lands in the right session's
+// thread once approved.
+export interface PendingPhoneCall {
+  sessionId: string;
+  fromAgentId: AgentId;
+  number: string;
+  purpose: string;
+}
+
 // A ChatSession is shared across Eva/Email/Research: one id, used as the
 // Hermes session key for all three profiles, so they scope memory/context
 // consistently to "this session" — but each still gets its own thread of
@@ -120,6 +133,12 @@ interface ChatState {
   // A delegation awaiting Approve/Decline. Never persisted — holds a live
   // callback and only makes sense for the page session that detected it.
   pendingDelegation: PendingDelegation | null;
+  // Same idea, for a proposed real phone call — see PendingPhoneCall.
+  // Mutually exclusive with pendingDelegation in practice (a reply is
+  // either one marker or the other), but kept as a separate field rather
+  // than a union so callers don't have to narrow a targetAgentId that
+  // wouldn't make sense for a phone call anyway.
+  pendingPhoneCall: PendingPhoneCall | null;
   // Set when a Chats-search result is clicked: which message to scroll to
   // and briefly highlight in the chat panel, and the query that matched it
   // (so the exact matched text, not just the message, can be marked).
@@ -134,6 +153,12 @@ interface ChatState {
   // persisted — a phone reload should always land closed.
   mobileSidebarOpen: boolean;
   view: "chat" | "sessions" | "phone";
+  // Set when a notification toast for a specific call is clicked (see
+  // NotificationListener) — PhoneView reads and clears this on mount/
+  // update to jump straight to that call's detail instead of the list.
+  // Never persisted, purely a one-shot navigation hint, same pattern as
+  // scrollToMessage below.
+  pendingPhoneCallToOpen: string | null;
   // 0 (silent) to 1 (full) — controls playback volume for Eva's spoken
   // replies in VoiceSession. Persisted like other UI preferences below.
   voiceVolume: number;
@@ -188,6 +213,15 @@ interface ChatState {
   ) => Promise<string>;
   approveDelegation: (onDelta?: (chunk: string) => void) => Promise<void>;
   declineDelegation: () => void;
+  // Places the real call and returns the confirmation/error text that
+  // also lands in Eva's thread — the return value exists purely so a
+  // voice session can speak the same text (see voiceApprovePhoneCall)
+  // without needing its own onDelta-streaming plumbing, unlike
+  // approveDelegation: there's nothing to stream here, just one static
+  // sentence once the call is either placed or fails.
+  approvePhoneCall: () => Promise<string>;
+  declinePhoneCall: () => void;
+  setPendingPhoneCallToOpen: (callId: string | null) => void;
   toggleSidebar: () => void;
   setMobileSidebarOpen: (open: boolean) => void;
   setVoiceVolume: (volume: number) => void;
@@ -201,6 +235,12 @@ interface ChatState {
   // the comment on approveDelegation's onDelta param for why this exists.
   voiceApproveDelegation: (() => Promise<void>) | null;
   setVoiceApproveDelegation: (fn: (() => Promise<void>) | null) => void;
+  // Same idea as voiceApproveDelegation, but for PendingPhoneCallCard's
+  // Approve button — lets VoiceSession speak the confirmation/error text
+  // approvePhoneCall returns instead of it only landing in the text
+  // thread silently.
+  voiceApprovePhoneCall: (() => Promise<void>) | null;
+  setVoiceApprovePhoneCall: (fn: (() => Promise<void>) | null) => void;
 }
 
 // Only Eva (jarvis) ever emits a line like "[[DELEGATE:email]] draft a
@@ -222,7 +262,15 @@ const DELEGATE_TARGETS: Record<string, AgentId> = {
 // RESEARCH_DEEP_MODE_CONTEXT. No suffix defaults to fast (processDelegateMarker),
 // matching "quick answer by default, offer to go deeper" rather than the
 // old always-unrestricted delegation behavior.
-const DELEGATE_MARKER = /^\[\[DELEGATE:(email|research)(?::(fast|deep))?\]\][ \t]*(.*)$/m;
+const DELEGATE_MARKER = /^\[\[DELEGATE:(email|research|phone)(?::(fast|deep))?\]\][ \t]*(.*)$/m;
+
+// Parses phone's "<number>|<purpose>" task format (see lib/agents.ts) —
+// deliberately permissive about the number's exact formatting (spaces,
+// dashes, parens, a leading +1 or not) since it's just captured here and
+// normalized server-side in /api/phone/calls/create, which is also where
+// an actually-invalid number gets rejected. This only needs to split the
+// two halves correctly.
+const PHONE_TASK_PATTERN = /^([+()\-\s\d]{7,})\|([\s\S]+)$/;
 
 // Caps how many delegate -> Eva-reacts -> delegate-again cycles a single
 // turn can chain through, so a model that keeps re-delegating can't loop
@@ -711,6 +759,36 @@ export const useChatStore = create<ChatState>()(
         const match = DELEGATE_MARKER.exec(fullText);
         if (!match || hopsLeft <= 0) return fullText.trim();
 
+        const rawTask = match[3].trim();
+        if (!rawTask) return fullText.trim();
+        const strippedText = fullText.replace(DELEGATE_MARKER, "").replace(/^\s+/, "");
+
+        const applyStrip = () =>
+          set((s) => ({
+            sessions: s.sessions.map((sess) =>
+              sess.id === sessionId
+                ? {
+                    ...sess,
+                    threads: {
+                      ...sess.threads,
+                      [agentId]: (sess.threads[agentId] ?? []).map((m) =>
+                        m.id === messageId ? { ...m, content: strippedText } : m
+                      ),
+                    },
+                  }
+                : sess
+            ),
+          }));
+
+        if (match[1] === "phone") {
+          const phoneMatch = PHONE_TASK_PATTERN.exec(rawTask);
+          if (!phoneMatch) return fullText.trim(); // malformed — degrade to showing the raw text rather than parking a broken card
+          const [, number, purpose] = phoneMatch;
+          applyStrip();
+          set({ pendingPhoneCall: { sessionId, fromAgentId: agentId, number: number.trim(), purpose: purpose.trim() } });
+          return strippedText;
+        }
+
         const target = DELEGATE_TARGETS[match[1]];
         // Eva's own delegation never runs deep research — that's reserved
         // for the user's manual Fast/Deep toggle on the Research tab (see
@@ -719,35 +797,20 @@ export const useChatStore = create<ChatState>()(
         // ever emits one despite the system prompt no longer describing
         // it) rather than trusting it.
         const researchMode = "fast";
-        const task = match[3].trim();
-        if (!target || !task || target === agentId) return fullText.trim();
+        if (!target || target === agentId) return fullText.trim();
 
-        const strippedText = fullText.replace(DELEGATE_MARKER, "").replace(/^\s+/, "");
-
-        set((s) => ({
-          sessions: s.sessions.map((sess) =>
-            sess.id === sessionId
-              ? {
-                  ...sess,
-                  threads: {
-                    ...sess.threads,
-                    [agentId]: (sess.threads[agentId] ?? []).map((m) =>
-                      m.id === messageId ? { ...m, content: strippedText } : m
-                    ),
-                  },
-                }
-              : sess
-          ),
+        applyStrip();
+        set({
           pendingDelegation: {
             sessionId,
             fromAgentId: agentId,
             targetAgentId: target,
-            task,
+            task: rawTask,
             hopsLeft,
             onToolEvent,
             researchMode,
           },
-        }));
+        });
 
         return strippedText;
       };
@@ -844,11 +907,13 @@ export const useChatStore = create<ChatState>()(
         isStreaming: false,
         activeAbortController: null,
         pendingDelegation: null,
+        pendingPhoneCall: null,
         scrollToMessage: null,
         error: null,
         sidebarCollapsed: false,
         mobileSidebarOpen: false,
         view: "chat",
+        pendingPhoneCallToOpen: null,
         voiceVolume: 1,
         researchFastMode: true,
         voiceOpen: false,
@@ -879,6 +944,7 @@ export const useChatStore = create<ChatState>()(
             activeAgentId: DEFAULT_AGENT_ID,
             view: "chat",
             pendingDelegation: null,
+            pendingPhoneCall: null,
             scrollToMessage: null,
             researchFastMode: true,
           });
@@ -890,7 +956,14 @@ export const useChatStore = create<ChatState>()(
           // the session that raised it — don't let it linger and fire out
           // of context after switching. Same for researchFastMode: see
           // startNewSession's comment just above.
-          set({ activeSessionId: sessionId, view: "chat", pendingDelegation: null, scrollToMessage: null, researchFastMode: true });
+          set({
+            activeSessionId: sessionId,
+            view: "chat",
+            pendingDelegation: null,
+            pendingPhoneCall: null,
+            scrollToMessage: null,
+            researchFastMode: true,
+          });
         },
 
         // Used by the Chats search results: jump straight to the session,
@@ -903,6 +976,7 @@ export const useChatStore = create<ChatState>()(
             activeAgentId: agentId,
             view: "chat",
             pendingDelegation: null,
+            pendingPhoneCall: null,
             scrollToMessage: { messageId, query },
           });
         },
@@ -926,6 +1000,7 @@ export const useChatStore = create<ChatState>()(
 
         toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
         setMobileSidebarOpen: (open) => set({ mobileSidebarOpen: open }),
+        setPendingPhoneCallToOpen: (callId) => set({ pendingPhoneCallToOpen: callId }),
 
         // Cancels whatever request is currently in flight — including a
         // delegated hand-off, since only one streamChatCompletion call is
@@ -967,6 +1042,47 @@ export const useChatStore = create<ChatState>()(
 
         voiceApproveDelegation: null,
         setVoiceApproveDelegation: (fn) => set({ voiceApproveDelegation: fn }),
+
+        // Places the real call. Unlike approveDelegation, there's no
+        // subagent turn to await and no runEvaAfterDelegation follow-up —
+        // a live phone call doesn't resolve on the timescale of one
+        // request, so the only thing to do here is confirm the call was
+        // placed (or report that it wasn't) and leave the actual outcome
+        // for the Phone tab once the call ends.
+        approvePhoneCall: async () => {
+          const pending = get().pendingPhoneCall;
+          if (!pending) return "";
+          set({ pendingPhoneCall: null, isStreaming: true });
+
+          let text: string;
+          try {
+            const res = await fetch("/api/phone/calls/create", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ number: pending.number, purpose: pending.purpose }),
+            });
+            const data = await res.json().catch(() => null);
+            if (!res.ok || !data?.callId) {
+              throw new Error(data?.error || "Failed to place the call");
+            }
+            text = `Calling ${data.toNumber ?? pending.number} now — you'll be able to see how it went in the Phone tab once it's done.`;
+          } catch (err) {
+            const detail = err instanceof Error ? err.message : "Failed to place the call";
+            text = `⚠️ Couldn't place that call — ${detail}`;
+          } finally {
+            set({ isStreaming: false });
+          }
+
+          appendMessages(pending.sessionId, pending.fromAgentId, [
+            { id: newId(), role: "assistant", content: text },
+          ]);
+          return text;
+        },
+
+        declinePhoneCall: () => set({ pendingPhoneCall: null }),
+
+        voiceApprovePhoneCall: null,
+        setVoiceApprovePhoneCall: (fn) => set({ voiceApprovePhoneCall: fn }),
 
         sendMessage: async (text) => {
           const trimmed = text.trim();

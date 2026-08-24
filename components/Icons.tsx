@@ -85,6 +85,25 @@ export function SpeakerMutedIcon(props: IconProps) {
   );
 }
 
+export function BellIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M12 3a4 4 0 0 0-4 4v3.2c0 .9-.35 1.77-.98 2.4L5 14.7h14l-2.02-2.1a3.4 3.4 0 0 1-.98-2.4V7a4 4 0 0 0-4-4z" />
+      <path d="M9.5 17.7a2.5 2.5 0 0 0 5 0" />
+    </svg>
+  );
+}
+
+export function BellOffIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M12 3a4 4 0 0 0-4 4v3.2c0 .9-.35 1.77-.98 2.4L5 14.7h14l-2.02-2.1a3.4 3.4 0 0 1-.98-2.4V7a4 4 0 0 0-4-4z" />
+      <path d="M9.5 17.7a2.5 2.5 0 0 0 5 0" />
+      <line x1="4" y1="4" x2="20" y2="20" />
+    </svg>
+  );
+}
+
 export function AccountIcon(props: IconProps) {
   return (
     <svg {...base(props)}>

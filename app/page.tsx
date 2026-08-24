@@ -5,6 +5,7 @@ import { ChatPanel } from "@/components/ChatPanel";
 import { TopBar } from "@/components/TopBar";
 import { SessionListView } from "@/components/SessionListView";
 import { PhoneView } from "@/components/PhoneView";
+import { NotificationListener } from "@/components/NotificationListener";
 import { useChatStore } from "@/lib/store";
 
 export default function Home() {
@@ -12,6 +13,7 @@ export default function Home() {
 
   return (
     <div className="flex h-dvh w-full flex-col overflow-hidden bg-[#f4f6fb]">
+      <NotificationListener />
       <div className="flex min-h-0 flex-1">
         <Sidebar />
         {view === "sessions" ? (
