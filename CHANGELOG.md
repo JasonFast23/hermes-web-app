@@ -2,6 +2,10 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.9 — 2026-08-24
+
+- Fixed voice mode being dramatically slower on Android than on Mac/Windows — the screen locking mid-conversation was letting the phone throttle network activity; voice mode now keeps the screen awake for as long as it's actually in use.
+
 ## 1.0.8 — 2026-08-24
 
 - Added a real Android app — install it directly on your phone, backed by the same always-on server this web app runs on.
