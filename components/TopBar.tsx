@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useChatStore } from "@/lib/store";
 import { listAudioDevices } from "@/lib/audioDevices";
-import { SpeakerIcon, SpeakerMutedIcon } from "./Icons";
+import { MenuIcon, PlusIcon, SpeakerIcon, SpeakerMutedIcon } from "./Icons";
 
 // Chrome/Edge only — not in TS's lib.dom types, absent on Safari/Firefox.
 // The speaker picker only makes sense to show where it can actually do
@@ -20,6 +20,8 @@ export function TopBar() {
   const setAudioInputDeviceId = useChatStore((s) => s.setAudioInputDeviceId);
   const audioOutputDeviceId = useChatStore((s) => s.audioOutputDeviceId);
   const setAudioOutputDeviceId = useChatStore((s) => s.setAudioOutputDeviceId);
+  const setMobileSidebarOpen = useChatStore((s) => s.setMobileSidebarOpen);
+  const startNewSession = useChatStore((s) => s.startNewSession);
 
   const [inputs, setInputs] = useState<MediaDeviceInfo[]>([]);
   const [outputs, setOutputs] = useState<MediaDeviceInfo[]>([]);
@@ -66,8 +68,29 @@ export function TopBar() {
   }, [open]);
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-end border-b border-black/[0.06] px-4">
+    <header className="flex h-14 shrink-0 items-center justify-between border-b border-black/[0.06] px-2 pt-[env(safe-area-inset-top)] md:justify-end md:px-4">
+      <button
+        type="button"
+        aria-label="Open menu"
+        onClick={() => setMobileSidebarOpen(true)}
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-black/[0.04] md:hidden"
+      >
+        <MenuIcon className="h-[19px] w-[19px]" />
+      </button>
+
+      <span className="truncate text-[15px] font-medium text-zinc-700 md:hidden">Eva</span>
+
       <div className="relative flex items-center gap-1 text-zinc-500" ref={popoverRef}>
+        <button
+          type="button"
+          aria-label="New session"
+          title="New session"
+          onClick={() => startNewSession()}
+          className="flex h-9 w-9 items-center justify-center rounded-md hover:bg-black/[0.04] md:hidden"
+        >
+          <PlusIcon className="h-[18px] w-[18px]" />
+        </button>
+
         <button
           type="button"
           aria-label="Voice settings"

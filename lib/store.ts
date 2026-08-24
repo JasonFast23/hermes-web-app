@@ -127,6 +127,12 @@ interface ChatState {
   scrollToMessage: { messageId: string; query: string } | null;
   error: string | null;
   sidebarCollapsed: boolean;
+  // Below the md breakpoint the sidebar isn't a permanent layout column at
+  // all (see Sidebar.tsx) — it's an off-canvas drawer toggled by a
+  // hamburger button, so it needs its own open/closed flag independent of
+  // sidebarCollapsed (which only makes sense for the desktop rail). Never
+  // persisted — a phone reload should always land closed.
+  mobileSidebarOpen: boolean;
   view: "chat" | "sessions";
   // 0 (silent) to 1 (full) — controls playback volume for Eva's spoken
   // replies in VoiceSession. Persisted like other UI preferences below.
@@ -183,6 +189,7 @@ interface ChatState {
   approveDelegation: (onDelta?: (chunk: string) => void) => Promise<void>;
   declineDelegation: () => void;
   toggleSidebar: () => void;
+  setMobileSidebarOpen: (open: boolean) => void;
   setVoiceVolume: (volume: number) => void;
   setAudioInputDeviceId: (deviceId: string | null) => void;
   setAudioOutputDeviceId: (deviceId: string | null) => void;
@@ -840,6 +847,7 @@ export const useChatStore = create<ChatState>()(
         scrollToMessage: null,
         error: null,
         sidebarCollapsed: false,
+        mobileSidebarOpen: false,
         view: "chat",
         voiceVolume: 1,
         researchFastMode: true,
@@ -917,6 +925,7 @@ export const useChatStore = create<ChatState>()(
         },
 
         toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+        setMobileSidebarOpen: (open) => set({ mobileSidebarOpen: open }),
 
         // Cancels whatever request is currently in flight — including a
         // delegated hand-off, since only one streamChatCompletion call is

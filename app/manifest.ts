@@ -7,6 +7,7 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "AiPX Agent — voice and chat assistant powered by Eva",
     start_url: "/",
     display: "standalone",
+    orientation: "portrait-primary",
     background_color: "#f4f6fb",
     theme_color: "#18181b",
     icons: [

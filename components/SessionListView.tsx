@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useChatStore } from "@/lib/store";
 import { AgentId } from "@/lib/agents";
-import { CheckIcon, PlusIcon, SearchIcon, XIcon } from "./Icons";
+import { CheckIcon, MenuIcon, PlusIcon, SearchIcon, XIcon } from "./Icons";
 
 const SNIPPET_RADIUS = 40;
 
@@ -97,6 +97,7 @@ export function SessionListView() {
   const openSearchResult = useChatStore((s) => s.openSearchResult);
   const startNewSession = useChatStore((s) => s.startNewSession);
   const deleteSessions = useChatStore((s) => s.deleteSessions);
+  const setMobileSidebarOpen = useChatStore((s) => s.setMobileSidebarOpen);
 
   const [query, setQuery] = useState("");
   const [selecting, setSelecting] = useState(false);
@@ -188,8 +189,18 @@ export function SessionListView() {
 
   return (
     <section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#f4f6fb]">
-      <div className="flex h-14 shrink-0 items-center justify-between border-b border-black/[0.06] px-6">
-        <h1 className="text-xl font-semibold text-zinc-800">Chats</h1>
+      <div className="flex h-14 shrink-0 items-center justify-between border-b border-black/[0.06] px-3 pt-[env(safe-area-inset-top)] sm:px-6">
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            aria-label="Open menu"
+            onClick={() => setMobileSidebarOpen(true)}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-black/[0.04] md:hidden"
+          >
+            <MenuIcon className="h-[19px] w-[19px]" />
+          </button>
+          <h1 className="text-xl font-semibold text-zinc-800">Chats</h1>
+        </div>
 
         {selecting ? (
           <div className="flex items-center gap-3 text-[13px]">
@@ -238,7 +249,7 @@ export function SessionListView() {
         )}
       </div>
 
-      <div className="shrink-0 px-6 pt-4">
+      <div className="shrink-0 px-3 pt-4 sm:px-6">
         <div className="flex items-center gap-2.5 rounded-full border border-black/[0.07] bg-white px-4 py-2.5 shadow-[0_1px_2px_rgba(0,0,0,0.04)] focus-within:border-black/[0.15]">
           <SearchIcon className="h-[18px] w-[18px] shrink-0 text-zinc-400" />
           <input

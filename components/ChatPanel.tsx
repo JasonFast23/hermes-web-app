@@ -74,11 +74,11 @@ export function ChatPanel() {
         </div>
       ) : messages.length === 0 ? (
         <div className="relative flex flex-1 flex-col items-center justify-center px-6 text-center">
-          <h1 className="font-[family-name:var(--font-display)] text-6xl leading-none tracking-tight text-zinc-400/70 sm:text-7xl">
+          <h1 className="font-[family-name:var(--font-display)] text-4xl leading-none tracking-tight text-zinc-400/70 sm:text-6xl md:text-7xl">
             AiPX Agent
           </h1>
           <p
-            className="mt-6 whitespace-nowrap text-lg leading-relaxed text-zinc-400 sm:text-xl"
+            className="mt-6 whitespace-normal text-base leading-relaxed text-zinc-400 sm:whitespace-nowrap sm:text-lg md:text-xl"
             suppressHydrationWarning
           >
             {greetingForHour(new Date().getHours())} Priscilla!

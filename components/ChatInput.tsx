@@ -150,7 +150,10 @@ export function ChatInput() {
   const hasText = text.trim().length > 0;
 
   return (
-    <form onSubmit={handleSubmit} className="px-6 pb-6">
+    <form
+      onSubmit={handleSubmit}
+      className="px-3 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-6"
+    >
       <div className="mx-auto w-full max-w-2xl">
         {dictationStatus === "error" && dictationError && (
           <p className="mb-2 px-1 text-[12px] text-red-600">{dictationError}</p>

@@ -23,6 +23,22 @@ export function SkillsIcon(props: IconProps) {
   );
 }
 
+export function MenuIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 6h16M4 12h16M4 18h16" />
+    </svg>
+  );
+}
+
+export function PhoneIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 5c0-.6.4-1 1-1h2.8c.5 0 .9.3 1 .8l1 3.8c.1.4 0 .9-.4 1.2L7.9 11a12 12 0 0 0 5 5l1.2-1.5c.3-.4.8-.5 1.2-.4l3.8 1c.5.1.8.5.8 1V19c0 .6-.4 1-1 1h-1.5C10.6 20 4 13.4 4 6.5V5z" />
+    </svg>
+  );
+}
+
 export function MessagingIcon(props: IconProps) {
   return (
     <svg {...base(props)}>

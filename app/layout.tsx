@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono, Anton } from "next/font/google";
 import "./globals.css";
 
@@ -21,6 +21,23 @@ const anton = Anton({
 export const metadata: Metadata = {
   title: "AiPX Agent",
   description: "AiPX Agent — voice and chat assistant powered by Eva",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "AiPX Agent",
+  },
+};
+
+// viewportFit: "cover" lets the app draw under the status bar/gesture bar
+// on a phone in standalone (installed) mode, with env(safe-area-inset-*)
+// used around the app's edges (TopBar, ChatInput, the mobile Sidebar
+// drawer) to keep content clear of them instead of hiding under notches.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  viewportFit: "cover",
+  themeColor: "#18181b",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

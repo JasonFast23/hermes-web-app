@@ -2,6 +2,12 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.8 — 2026-08-24
+
+- Added a real Android app — install it directly on your phone, backed by the same always-on server this web app runs on.
+- Redesigned the phone-width layout: hamburger menu with a slide-out sidebar, mobile header, and a chat view that actually fits a phone screen instead of the desktop sidebar squeezed down.
+- Added a "Phone (test)" page for trying the Retell phone-call integration from a browser mic, no real phone number needed.
+
 ## 1.0.7 — 2026-08-20
 
 - Eva's delegation no longer adds extra scope beyond what you actually asked.

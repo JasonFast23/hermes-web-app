@@ -10,7 +10,7 @@ export default function Home() {
   const view = useChatStore((s) => s.view);
 
   return (
-    <div className="flex h-screen w-full flex-col overflow-hidden bg-[#f4f6fb]">
+    <div className="flex h-dvh w-full flex-col overflow-hidden bg-[#f4f6fb]">
       <div className="flex min-h-0 flex-1">
         <Sidebar />
         {view === "sessions" ? (
