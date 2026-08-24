@@ -342,10 +342,30 @@ export default function PhonePage() {
     };
   }, []);
 
+  // Opening a call is local component state, not a real route change — so
+  // without this, the phone's hardware/gesture back button has no browser
+  // history entry to act on and does nothing (or leaves the page
+  // entirely), even though the on-screen "← Back" link works fine for a
+  // tap. Pushing a history entry when a call opens, and closing the
+  // detail view on popstate, makes the system back button behave exactly
+  // like the on-screen one — both end up going through this same
+  // listener, via history.back() below, so they can never fall out of
+  // sync with each other.
+  useEffect(() => {
+    if (!selectedId) return;
+    window.history.pushState({ phoneCallDetail: selectedId }, "");
+    const handlePopState = () => setSelectedId(null);
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [selectedId]);
+
+  const openCall = (callId: string) => setSelectedId(callId);
+  const closeCall = () => window.history.back();
+
   if (selectedId) {
     return (
       <section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#f4f6fb]">
-        <CallDetailPanel callId={selectedId} onBack={() => setSelectedId(null)} />
+        <CallDetailPanel callId={selectedId} onBack={closeCall} />
       </section>
     );
   }
@@ -389,7 +409,7 @@ export default function PhonePage() {
           </p>
         )}
         {calls?.map((call) => (
-          <CallRow key={call.call_id} call={call} onClick={() => setSelectedId(call.call_id)} />
+          <CallRow key={call.call_id} call={call} onClick={() => openCall(call.call_id)} />
         ))}
       </div>
     </section>

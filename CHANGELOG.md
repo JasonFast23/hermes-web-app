@@ -2,6 +2,10 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.11 — 2026-08-24
+
+- Fixed the phone's hardware/gesture back button not closing a call's detail view in the Phone tab — it worked with the on-screen "← Back" link but not the device's own back navigation, since opening a call wasn't registered as a real step in browser history.
+
 ## 1.0.10 — 2026-08-24
 
 - The Phone tab is now a real call history — every inbound and outbound call on the Retell number, with its AI-generated summary, playable recording, and full transcript. The old browser-mic call simulator still exists, just tucked under a "Test tools" toggle instead of being the whole page.
