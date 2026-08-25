@@ -52,7 +52,7 @@ function SessionStack({ onNavigate }: { onNavigate?: () => void }) {
     <div className="mt-4 flex flex-col gap-0.5">
       {DATE_GROUP_ORDER.filter((label) => groups[label]?.length).map((label) => (
         <div key={label} className="mt-1">
-          <div className="px-2.5 py-0.5 text-[11px] font-medium uppercase tracking-wide text-zinc-400">
+          <div className="px-2.5 py-0.5 text-[12px] font-medium uppercase tracking-wide text-zinc-400 md:text-[11px]">
             {label}
           </div>
           {groups[label].map((sess) => (
@@ -64,7 +64,7 @@ function SessionStack({ onNavigate }: { onNavigate?: () => void }) {
                   onNavigate?.();
                 }}
                 title={sess.title}
-                className={`block w-full truncate rounded-lg py-1.5 pl-2.5 pr-7 text-left text-[13.5px] transition-colors ${
+                className={`block w-full truncate rounded-lg py-1.5 pl-2.5 pr-7 text-left text-[15px] transition-colors md:text-[13.5px] ${
                   sess.id === activeSessionId
                     ? "bg-black/[0.05] text-zinc-900"
                     : "text-zinc-600 hover:bg-black/[0.04] hover:text-zinc-800"
@@ -179,16 +179,16 @@ function SidebarPanel({
   const setView = useChatStore((s) => s.setView);
 
   return (
-    <div className="flex w-[260px] shrink-0 flex-col">
+    <div className="flex h-full w-[260px] shrink-0 flex-col">
       <div className="flex items-center justify-between p-3 pb-0">
         <span className="px-1 text-lg font-semibold tracking-tight text-zinc-800">Eva</span>
         <button
           type="button"
           aria-label="Collapse sidebar"
           onClick={onCollapse}
-          className="flex h-8 w-8 items-center justify-center rounded-md text-zinc-500 hover:bg-black/[0.05]"
+          className="flex h-10 w-10 items-center justify-center rounded-md text-zinc-500 hover:bg-black/[0.05]"
         >
-          <PanelToggleIcon className="h-[18px] w-[18px]" />
+          <PanelToggleIcon className="h-5 w-5" />
         </button>
       </div>
 
@@ -199,7 +199,7 @@ function SidebarPanel({
             startNewSession();
             onNavigate?.();
           }}
-          className="group flex items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[13.5px] text-zinc-600 transition-colors hover:bg-black/[0.04]"
+          className="group flex items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[15px] text-zinc-600 transition-colors hover:bg-black/[0.04] md:text-[13.5px]"
         >
           <PlusIcon className="h-[18px] w-[18px] shrink-0 text-zinc-500" />
           <span className="truncate">New session</span>
@@ -210,7 +210,7 @@ function SidebarPanel({
             setView("sessions");
             onNavigate?.();
           }}
-          className={`flex items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[13.5px] transition-colors ${
+          className={`flex items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[15px] transition-colors md:text-[13.5px] ${
             view === "sessions"
               ? "bg-black/[0.05] text-zinc-900"
               : "text-zinc-600 hover:bg-black/[0.04]"
@@ -225,7 +225,7 @@ function SidebarPanel({
             setView("phone");
             onNavigate?.();
           }}
-          className={`flex items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[13.5px] transition-colors ${
+          className={`flex items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[15px] transition-colors md:text-[13.5px] ${
             view === "phone"
               ? "bg-black/[0.05] text-zinc-900"
               : "text-zinc-600 hover:bg-black/[0.04]"
@@ -235,7 +235,7 @@ function SidebarPanel({
           <span className="truncate">Phone</span>
         </button>
 
-        <div className="mt-4 flex items-center gap-3 px-2.5 py-1.5 text-[13.5px] font-medium text-zinc-500">
+        <div className="mt-4 flex items-center gap-3 px-2.5 py-1.5 text-[15px] font-medium text-zinc-500 md:text-[13.5px]">
           <AgentsIcon className="h-[18px] w-[18px] shrink-0 text-zinc-500" />
           <span>Agents</span>
         </div>
@@ -255,7 +255,7 @@ function SidebarPanel({
                   onNavigate?.();
                 }}
                 title={label}
-                className={`flex w-full items-center rounded-lg py-1.5 text-left text-[13.5px] transition-colors ${
+                className={`flex w-full items-center rounded-lg py-1.5 text-left text-[15px] transition-colors md:text-[13.5px] ${
                   isJarvis ? "pl-[38px] pr-2.5 font-medium" : "pl-[54px] pr-2.5"
                 } ${
                   isActive
@@ -281,7 +281,7 @@ function SidebarPanel({
             onOpenAbout();
             onNavigate?.();
           }}
-          className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-400 transition-colors hover:bg-black/[0.04] hover:text-zinc-600"
+          className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[14.5px] text-zinc-400 transition-colors hover:bg-black/[0.04] hover:text-zinc-600 md:text-[13px]"
         >
           <InfoIcon className="h-[16px] w-[16px] shrink-0" />
           <span>About</span>
@@ -329,23 +329,32 @@ export function Sidebar() {
       {/* Mobile: an off-canvas drawer over the content, opened by a
           hamburger button in TopBar/SessionListView — never a layout
           column, since it would have to eat the entire screen width to be
-          usable at a phone's size. */}
-      {mobileOpen && (
-        <div className="fixed inset-0 z-40 flex md:hidden">
-          <div
-            className="absolute inset-0 bg-black/30"
-            onClick={() => setMobileOpen(false)}
-            aria-hidden="true"
+          usable at a phone's size. Always mounted (rather than conditionally
+          rendered) and animated via transform/opacity so open/close slides
+          smoothly instead of popping in and out of the DOM instantly. */}
+      <div
+        className={`fixed inset-0 z-40 flex transition-opacity duration-200 ease-out md:hidden ${
+          mobileOpen ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
+        }`}
+        aria-hidden={!mobileOpen}
+      >
+        <div
+          className="absolute inset-0 bg-black/30"
+          onClick={() => setMobileOpen(false)}
+          aria-hidden="true"
+        />
+        <div
+          className={`relative flex h-full max-w-[85vw] flex-col bg-[#fafafa] pt-[env(safe-area-inset-top)] shadow-xl transition-transform duration-200 ease-out ${
+            mobileOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
+        >
+          <SidebarPanel
+            onNavigate={() => setMobileOpen(false)}
+            onCollapse={() => setMobileOpen(false)}
+            onOpenAbout={() => setAboutOpen(true)}
           />
-          <div className="relative flex h-full max-w-[85vw] flex-col bg-[#fafafa] pt-[env(safe-area-inset-top)] shadow-xl">
-            <SidebarPanel
-              onNavigate={() => setMobileOpen(false)}
-              onCollapse={() => setMobileOpen(false)}
-              onOpenAbout={() => setAboutOpen(true)}
-            />
-          </div>
         </div>
-      )}
+      </div>
     </>
   );
 }
