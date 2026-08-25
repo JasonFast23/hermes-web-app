@@ -274,7 +274,7 @@ function SidebarPanel({
         <SessionStack onNavigate={onNavigate} />
       </nav>
 
-      <div className="border-t border-black/[0.06] p-3 pt-2">
+      <div className="border-t border-black/[0.06] p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2">
         <button
           type="button"
           onClick={() => {
