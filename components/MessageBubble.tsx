@@ -290,7 +290,7 @@ export function MessageBubble({
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
-        className={`max-w-[75%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+        className={`max-w-[75%] min-w-0 whitespace-pre-wrap break-words rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
           isUser
             ? "bg-zinc-900 text-white"
             : "bg-white text-zinc-800 shadow-[0_1px_2px_rgba(0,0,0,0.04)]"

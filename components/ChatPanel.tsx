@@ -86,7 +86,7 @@ export function ChatPanel() {
 
         </div>
       ) : (
-        <div className="relative flex-1 space-y-3 overflow-y-auto p-4">
+        <div className="relative flex-1 space-y-3 overflow-x-hidden overflow-y-auto p-4">
           {messages.map((message, i) => {
             // A delegate-marker message ends up with empty content once the
             // marker is stripped out (see processDelegateMarker) — nothing
