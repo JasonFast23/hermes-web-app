@@ -9,16 +9,15 @@ import { PhoneView } from "@/components/PhoneView";
 import { NotificationListener } from "@/components/NotificationListener";
 import { useChatStore } from "@/lib/store";
 
-// A right-swipe-from-the-left-edge opens the mobile drawer, as an
-// alternative to tapping TopBar/SessionListView's small hamburger button.
-// Only arms when the touch *starts* within EDGE_ZONE_PX of the left edge
-// (like a native OS edge-swipe) so an ordinary horizontal-ish drag or tap
-// anywhere else on screen — e.g. scrolling a list that happens to start
-// near the edge — can't trigger it by accident. The horizontal-vs-vertical
-// ratio check on top of that means a mostly-vertical scroll starting in the
-// zone still won't fire it either.
-const EDGE_ZONE_PX = 56;
-const OPEN_THRESHOLD_PX = 60;
+// A right-swipe anywhere on screen opens the mobile drawer, and a
+// left-swipe anywhere closes it — an alternative to tapping
+// TopBar/SessionListView's small hamburger button (or the drawer's own
+// close button). The horizontal-vs-vertical ratio check is what keeps this
+// from fighting with vertical scrolling in a list or the chat: only a drag
+// that's meaningfully more horizontal than vertical counts as this gesture,
+// so an ordinary scroll — even a slightly diagonal one — passes through
+// untouched.
+const SWIPE_THRESHOLD_PX = 60;
 
 export default function Home() {
   const view = useChatStore((s) => s.view);
@@ -27,9 +26,8 @@ export default function Home() {
   const touchStart = useRef<{ x: number; y: number } | null>(null);
 
   const handleTouchStart = (e: React.TouchEvent) => {
-    if (mobileSidebarOpen) return;
     const touch = e.touches[0];
-    touchStart.current = touch.clientX <= EDGE_ZONE_PX ? { x: touch.clientX, y: touch.clientY } : null;
+    touchStart.current = { x: touch.clientX, y: touch.clientY };
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
@@ -37,10 +35,14 @@ export default function Home() {
     const touch = e.touches[0];
     const dx = touch.clientX - touchStart.current.x;
     const dy = touch.clientY - touchStart.current.y;
-    if (dx > OPEN_THRESHOLD_PX && Math.abs(dx) > Math.abs(dy) * 1.5) {
-      setMobileSidebarOpen(true);
+    if (Math.abs(dx) > SWIPE_THRESHOLD_PX && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      if (dx > 0 && !mobileSidebarOpen) {
+        setMobileSidebarOpen(true);
+      } else if (dx < 0 && mobileSidebarOpen) {
+        setMobileSidebarOpen(false);
+      }
       touchStart.current = null;
-    } else if (Math.abs(dy) > OPEN_THRESHOLD_PX) {
+    } else if (Math.abs(dy) > SWIPE_THRESHOLD_PX) {
       touchStart.current = null;
     }
   };
