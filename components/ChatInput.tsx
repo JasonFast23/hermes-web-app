@@ -2,8 +2,7 @@
 
 import { useEffect, useRef, useState, FormEvent } from "react";
 import { useChatStore } from "@/lib/store";
-import { pickRecorderMimeType, extForMimeType } from "@/lib/audio";
-import { getUserMediaWithFallback } from "@/lib/audioDevices";
+import { startRealtimeDictation, type RealtimeDictationSession } from "@/lib/realtimeDictation";
 import { ArrowUpIcon, MicIcon, StopIcon, WaveformIcon } from "./Icons";
 import { VoiceSession } from "./VoiceSession";
 
@@ -14,9 +13,13 @@ export function ChatInput() {
   const [dictationStatus, setDictationStatus] = useState<DictationStatus>("idle");
   const [dictationError, setDictationError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const dictationStreamRef = useRef<MediaStream | null>(null);
-  const dictationRecorderRef = useRef<MediaRecorder | null>(null);
-  const dictationChunksRef = useRef<Blob[]>([]);
+  // Text that existed before dictation started — every partial/committed
+  // transcript update is computed fresh from this, never from a setText
+  // functional updater (which would concatenate each new partial onto the
+  // previous one instead of replacing it, since by then `prev` already
+  // contains the last partial).
+  const baseTextRef = useRef("");
+  const sessionRef = useRef<RealtimeDictationSession | null>(null);
   const sendMessage = useChatStore((s) => s.sendMessage);
   const isStreaming = useChatStore((s) => s.isStreaming);
   const stopStreaming = useChatStore((s) => s.stopStreaming);
@@ -67,49 +70,26 @@ export function ChatInput() {
     submit();
   };
 
-  const transcribeDictation = async (blob: Blob, ext: string) => {
-    try {
-      const form = new FormData();
-      form.append("audio", blob, `recording.${ext}`);
-      const res = await fetch("/api/voice/stt", { method: "POST", body: form });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "Transcription failed");
-
-      const transcript = typeof data.text === "string" ? data.text.trim() : "";
-      if (transcript) {
-        setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript));
-      }
-      setDictationStatus("idle");
-    } catch (err) {
-      setDictationError(err instanceof Error ? err.message : "Transcription failed");
-      setDictationStatus("error");
-    }
-  };
-
   const startDictation = async () => {
     setDictationError(null);
+    baseTextRef.current = text;
     try {
-      const stream = await getUserMediaWithFallback(audioInputDeviceId);
-      dictationStreamRef.current = stream;
-
-      const mimeType = pickRecorderMimeType();
-      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-      dictationChunksRef.current = [];
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) dictationChunksRef.current.push(e.data);
-      };
-
-      recorder.onstop = () => {
-        dictationStreamRef.current?.getTracks().forEach((t) => t.stop());
-        dictationStreamRef.current = null;
-
-        const blob = new Blob(dictationChunksRef.current, { type: recorder.mimeType || mimeType });
-        void transcribeDictation(blob, extForMimeType(recorder.mimeType || mimeType));
-      };
-
-      dictationRecorderRef.current = recorder;
-      recorder.start();
+      sessionRef.current = await startRealtimeDictation(audioInputDeviceId, {
+        onPartial: (partial) => {
+          const base = baseTextRef.current.trim();
+          setText(base ? `${base} ${partial}` : partial);
+        },
+        onCommitted: (committed) => {
+          const base = baseTextRef.current.trim();
+          const merged = base ? `${base} ${committed}` : committed;
+          baseTextRef.current = merged;
+          setText(merged);
+        },
+        onError: (message) => {
+          setDictationError(message);
+          setDictationStatus("error");
+        },
+      });
       setDictationStatus("recording");
     } catch (err) {
       setDictationError(err instanceof Error ? err.message : "Microphone access denied");
@@ -117,14 +97,16 @@ export function ChatInput() {
     }
   };
 
-  const stopDictation = () => {
-    dictationRecorderRef.current?.stop();
+  const stopDictation = async () => {
     setDictationStatus("transcribing");
+    await sessionRef.current?.stop();
+    sessionRef.current = null;
+    setDictationStatus("idle");
   };
 
   const handleMicClick = () => {
     if (dictationStatus === "recording") {
-      stopDictation();
+      void stopDictation();
     } else if (dictationStatus !== "transcribing") {
       void startDictation();
     }
@@ -132,8 +114,7 @@ export function ChatInput() {
 
   useEffect(() => {
     return () => {
-      dictationRecorderRef.current?.stop();
-      dictationStreamRef.current?.getTracks().forEach((t) => t.stop());
+      void sessionRef.current?.stop();
     };
   }, []);
 
@@ -208,6 +189,11 @@ export function ChatInput() {
                 }
               }}
               rows={1}
+              // Live partial transcripts overwrite `text` every ~100-300ms
+              // while recording — read-only (not disabled, which would
+              // fight focus) keeps it visible/selectable without a
+              // keystroke silently losing a race with the next partial.
+              readOnly={dictationStatus === "recording"}
               placeholder={
                 dictationStatus === "recording"
                   ? "Listening…"
