@@ -115,34 +115,70 @@ function base64FromInt16(int16: Int16Array): string {
   return btoa(binary);
 }
 
+// Temporary diagnostic instrumentation — added to pin down a reported
+// Android-only "tap mic, speak, nothing happens" failure that produced no
+// JS-visible error and no console output, only ambiguous low-level
+// Chromium/AAudio activity in logcat. Prefixed so it's trivially greppable
+// (`adb logcat | grep dictation`) and easy to remove once the platform gap
+// is confirmed. Mirrors how a previous, unrelated real-time-audio bug in
+// this codebase (the reverted WebSocket TTS streaming attempt) was
+// diagnosed — see git history on components/VoiceSession.tsx.
+function log(...args: unknown[]) {
+  console.log("[dictation]", ...args);
+}
+function logError(...args: unknown[]) {
+  console.error("[dictation]", ...args);
+}
+
 export async function startRealtimeDictation(
   preferredInputId: string | null,
   handlers: RealtimeDictationHandlers
 ): Promise<RealtimeDictationSession> {
+  log("starting");
   const audioContext = new AudioContext({ sampleRate: 16000 });
+  log("AudioContext created, requested 16000Hz, actual sampleRate =", audioContext.sampleRate, "state =", audioContext.state);
 
   const workletUrl = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "application/javascript" }));
-  const workletReady = audioContext.audioWorklet.addModule(workletUrl).finally(() => {
-    URL.revokeObjectURL(workletUrl);
-  });
+  const workletReady = audioContext.audioWorklet
+    .addModule(workletUrl)
+    .then(() => log("worklet module loaded"))
+    .catch((err) => {
+      logError("worklet module failed to load:", err);
+      throw err;
+    })
+    .finally(() => {
+      URL.revokeObjectURL(workletUrl);
+    });
 
   const [, stream, tokenRes] = await Promise.all([
     workletReady,
-    getUserMediaWithFallback(preferredInputId),
-    fetch("/api/voice/stt-realtime-token", { method: "POST" }),
+    getUserMediaWithFallback(preferredInputId).then((s) => {
+      log(
+        "getUserMedia resolved, tracks:",
+        s.getAudioTracks().map((t) => ({ label: t.label, readyState: t.readyState, settings: t.getSettings() }))
+      );
+      return s;
+    }),
+    fetch("/api/voice/stt-realtime-token", { method: "POST" }).then((r) => {
+      log("token fetch responded, ok =", r.ok, "status =", r.status);
+      return r;
+    }),
   ]);
 
   if (!tokenRes.ok) {
+    logError("token fetch failed, status =", tokenRes.status);
     stream.getTracks().forEach((t) => t.stop());
     await audioContext.close();
     throw new Error("Failed to start dictation");
   }
   const tokenData: { token?: string } = await tokenRes.json();
   if (!tokenData.token) {
+    logError("token response missing token field");
     stream.getTracks().forEach((t) => t.stop());
     await audioContext.close();
     throw new Error("Failed to start dictation");
   }
+  log("token minted");
 
   const params = new URLSearchParams({
     token: tokenData.token,
@@ -159,17 +195,21 @@ export async function startRealtimeDictation(
     // settles more often.
     vad_silence_threshold_secs: "0.5",
   });
+  log("opening websocket");
   const ws = new WebSocket(`wss://api.elevenlabs.io/v1/speech-to-text/realtime?${params.toString()}`);
 
   const source = audioContext.createMediaStreamSource(stream);
   const worklet = new AudioWorkletNode(audioContext, "pcm-downsampler");
+  worklet.onprocessorerror = (err) => logError("worklet processor errored:", err);
 
   let sessionReady = false;
   let stopping = false;
   let stopResolve: (() => void) | null = null;
   let flushTimeout: ReturnType<typeof setTimeout> | null = null;
+  let chunksSent = 0;
 
   const cleanup = () => {
+    log("cleanup, chunksSent =", chunksSent);
     try {
       source.disconnect();
     } catch {
@@ -194,6 +234,8 @@ export async function startRealtimeDictation(
 
   worklet.port.onmessage = (e: MessageEvent<Int16Array>) => {
     if (!sessionReady || ws.readyState !== WebSocket.OPEN) return;
+    chunksSent += 1;
+    if (chunksSent === 1) log("sending first audio chunk, samples =", e.data.length);
     ws.send(
       JSON.stringify({
         message_type: "input_audio_chunk",
@@ -204,18 +246,23 @@ export async function startRealtimeDictation(
     );
   };
 
+  ws.onopen = () => log("websocket open");
+
   ws.onmessage = (e: MessageEvent<string>) => {
     let data: { message_type?: string; text?: string; message?: string };
     try {
       data = JSON.parse(e.data);
-    } catch {
+    } catch (err) {
+      logError("failed to parse WS message:", e.data, err);
       return;
     }
+    log("ws message:", data.message_type, data.text ? `text.length=${data.text.length}` : "");
     switch (data.message_type) {
       case "session_started":
         sessionReady = true;
         // Only start streaming once the session is confirmed live.
         source.connect(worklet);
+        log("session_started, mic -> worklet connected");
         break;
       case "partial_transcript":
         handlers.onPartial(data.text ?? "");
@@ -231,18 +278,24 @@ export async function startRealtimeDictation(
         // silently ignoring it, so a real failure doesn't look like a
         // dropped connection.
         if (typeof data.message_type === "string" && data.message_type.includes("error")) {
+          logError("ws error message:", data);
           handlers.onError(data.message ?? data.message_type);
         }
     }
   };
-  ws.onerror = () => handlers.onError("Realtime connection failed");
-  ws.onclose = () => {
+  ws.onerror = (err) => {
+    logError("websocket error event:", err);
+    handlers.onError("Realtime connection failed");
+  };
+  ws.onclose = (e) => {
+    log("websocket closed, code =", e.code, "reason =", e.reason, "wasClean =", e.wasClean, "stopping =", stopping);
     if (!stopping) handlers.onError("Realtime connection closed unexpectedly");
   };
 
   return {
     stop: () =>
       new Promise<void>((resolve) => {
+        log("stop() called, sessionReady =", sessionReady, "wsReadyState =", ws.readyState);
         stopping = true;
         stopResolve = resolve;
         // Safety net: don't hang forever if no committed_transcript ever

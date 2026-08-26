@@ -92,6 +92,7 @@ export function ChatInput() {
       });
       setDictationStatus("recording");
     } catch (err) {
+      console.error("[dictation] startDictation threw:", err);
       setDictationError(err instanceof Error ? err.message : "Microphone access denied");
       setDictationStatus("error");
     }
