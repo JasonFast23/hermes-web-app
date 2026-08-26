@@ -151,6 +151,13 @@ export async function startRealtimeDictation(
     commit_strategy: "vad",
     no_verbatim: "true",
     language_code: "en",
+    // ElevenLabs' own default is 1.5s of silence before a phrase commits
+    // (confirmed via session_started's echoed config) — with normal
+    // conversational pauses shorter than that, text sits in the
+    // constantly-revising "partial" state for long stretches, which reads
+    // as sticky rather than smooth. Committing sooner means text visibly
+    // settles more often.
+    vad_silence_threshold_secs: "0.5",
   });
   const ws = new WebSocket(`wss://api.elevenlabs.io/v1/speech-to-text/realtime?${params.toString()}`);
 

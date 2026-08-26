@@ -120,12 +120,20 @@ export function ChatInput() {
 
   // Grow the textarea to fit its content (up to the CSS max-height, where
   // it starts scrolling instead) rather than staying a fixed height and
-  // scrolling internally the whole time.
+  // scrolling internally the whole time. Coalesced onto a single rAF per
+  // frame rather than running synchronously on every `text` change — live
+  // dictation partials can update `text` several times a second, and each
+  // one forces a synchronous layout reflow (set height:auto, then
+  // immediately read scrollHeight) if done eagerly, which is what made
+  // dictation feel sticky/janky rather than smooth.
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
+    const raf = requestAnimationFrame(() => {
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight}px`;
+    });
+    return () => cancelAnimationFrame(raf);
   }, [text]);
 
   const hasText = text.trim().length > 0;
