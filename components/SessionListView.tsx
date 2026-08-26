@@ -189,47 +189,49 @@ export function SessionListView() {
 
   return (
     <section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#f4f6fb]">
-      <div className="flex h-14 shrink-0 items-center justify-between border-b border-black/[0.06] px-3 pt-[env(safe-area-inset-top)] sm:px-6">
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            aria-label="Open menu"
-            onClick={() => setMobileSidebarOpen(true)}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-black/[0.04] md:hidden"
-          >
-            <MenuIcon className="h-[19px] w-[19px]" />
-          </button>
-          <h1 className="text-xl font-semibold text-zinc-800">Chats</h1>
-        </div>
-
+      <div className="flex min-h-[calc(3.5rem+env(safe-area-inset-top))] shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-black/[0.06] px-3 py-2 pt-[calc(env(safe-area-inset-top)+0.5rem)] sm:px-6">
         {selecting ? (
-          <div className="flex items-center gap-3 text-[13px]">
-            <span className="text-zinc-500">{selectedIds.size} selected</span>
-            <button
-              type="button"
-              onClick={() => setSelectedIds(allVisibleSelected ? new Set() : new Set(visibleSessions.map((s) => s.id)))}
-              className="rounded-md bg-zinc-900 px-3 py-1.5 font-medium text-white hover:bg-zinc-700"
-            >
-              Select all
-            </button>
-            <button
-              type="button"
-              onClick={handleDelete}
-              disabled={selectedIds.size === 0}
-              className="rounded-md bg-zinc-200 px-3 py-1.5 font-medium text-zinc-700 hover:bg-red-100 hover:text-red-600 disabled:pointer-events-none disabled:opacity-40"
-            >
-              Delete
-            </button>
+          <>
             <button
               type="button"
               onClick={exitSelectMode}
-              className="rounded-md px-3 py-1.5 font-medium text-zinc-600 hover:bg-black/[0.05]"
+              className="rounded-md px-2 py-1.5 text-[13px] font-medium text-zinc-600 hover:bg-black/[0.05]"
             >
               Cancel
             </button>
-          </div>
+            <span className="text-[13px] text-zinc-500">{selectedIds.size} selected</span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedIds(allVisibleSelected ? new Set() : new Set(visibleSessions.map((s) => s.id)))}
+                className="rounded-md bg-zinc-900 px-3 py-1.5 text-[13px] font-medium text-white hover:bg-zinc-700"
+              >
+                {allVisibleSelected ? "Deselect all" : "Select all"}
+              </button>
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={selectedIds.size === 0}
+                className="rounded-md bg-zinc-200 px-3 py-1.5 text-[13px] font-medium text-zinc-700 hover:bg-red-100 hover:text-red-600 disabled:pointer-events-none disabled:opacity-40"
+              >
+                Delete
+              </button>
+            </div>
+          </>
         ) : (
-          <div className="flex items-center gap-2">
+          <>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                aria-label="Open menu"
+                onClick={() => setMobileSidebarOpen(true)}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-black/[0.04] md:hidden"
+              >
+                <MenuIcon className="h-5 w-5" />
+              </button>
+              <h1 className="text-xl font-semibold text-zinc-800">Chats</h1>
+            </div>
+            <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => setSelecting(true)}
@@ -245,7 +247,8 @@ export function SessionListView() {
               <PlusIcon className="h-[15px] w-[15px]" />
               New session
             </button>
-          </div>
+            </div>
+          </>
         )}
       </div>
 
