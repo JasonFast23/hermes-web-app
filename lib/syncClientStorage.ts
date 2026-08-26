@@ -40,12 +40,29 @@ type ApplyFn = (partial: Partial<SyncedFields>) => void;
 let applyCallback: ApplyFn | null = null;
 let pendingApply: Partial<SyncedFields> | null = null;
 
+// Sets while a remote-originated update is being applied to the live store
+// via applyCallback (== useChatStore.setState). zustand's persist
+// middleware treats ANY setState call as a local write and calls this
+// module's own storage.setItem in response — without this flag, applying
+// what the server just sent us would immediately get scheduled to be sent
+// straight back to the server, which broadcasts it, which every connected
+// tab (including this one) reconciles again, forever. Confirmed happening:
+// a single message send produced dozens of GET/PUT /api/sync calls in a
+// few seconds. setItem checks this flag and skips scheduleServerWrite while
+// it's set (still writes localStorage — that part's harmless either way).
+let applyingRemoteUpdate = false;
+
 // A remote update can arrive (via the initial sync's own async work) before
 // lib/store.ts has had a chance to call subscribeSyncUpdates — buffers it
 // instead of dropping it.
 function applyRemote(partial: Partial<SyncedFields>) {
   if (applyCallback) {
-    applyCallback(partial);
+    applyingRemoteUpdate = true;
+    try {
+      applyCallback(partial);
+    } finally {
+      applyingRemoteUpdate = false;
+    }
   } else {
     pendingApply = { ...pendingApply, ...partial };
   }
@@ -208,6 +225,23 @@ let lastKnownVersion = 0;
 let migrationPromise: Promise<void> | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Serializes every sync operation (the initial migration, a debounced push,
+// a live-push reconcile) onto one chain so they never run concurrently —
+// each waits for whatever was already queued to fully finish first. Without
+// this, e.g. a debounced push still awaiting its PUT and a reconcile
+// triggered by another device's SSE broadcast could both read/merge/apply
+// their own stale snapshots and resolve out of order, with the one that
+// happens to finish last winning even if its data was older.
+let syncChain: Promise<void> = Promise.resolve();
+function withSyncLock<T>(fn: () => Promise<T>): Promise<T> {
+  const result = syncChain.then(fn, fn);
+  syncChain = result.then(
+    () => {},
+    () => {}
+  );
+  return result;
+}
+
 async function pushToServer(attempt = 0): Promise<void> {
   const fields = currentLocalSyncedFields();
   const result = await putServerState(lastKnownVersion, fields);
@@ -232,10 +266,7 @@ function scheduleServerWrite() {
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
     debounceTimer = null;
-    void (async () => {
-      if (migrationPromise) await migrationPromise;
-      await pushToServer();
-    })();
+    void withSyncLock(() => pushToServer());
   }, DEBOUNCE_MS);
 }
 
@@ -257,37 +288,24 @@ function isStreamingLocally(): boolean {
 }
 
 function reconcileFromServer() {
-  void (async () => {
-    // Let the one-time migration (if still in flight) finish and apply
-    // first, so a live push received right at startup can't race it —
-    // without this, both could call applySyncedFields concurrently with
-    // stale views of lastKnownVersion/localStorage.
-    if (migrationPromise) await migrationPromise;
+  void withSyncLock(async () => {
     const server = await fetchServerState();
     if (server.version <= lastKnownVersion || !server.state) return;
     lastKnownVersion = server.version;
 
-    const apply = () => {
-      const merged = mergeSyncedFields(currentLocalSyncedFields(), server.state!);
-      applySyncedFields(merged);
-    };
-
-    if (isStreamingLocally()) {
-      // Defer until this device's own stream goes idle — belt-and-suspenders
-      // on top of the merge (which is already safe to apply mid-stream)
-      // purely to avoid a visual flicker during genuine concurrent activity.
-      const check = () => {
-        if (isStreamingLocally()) {
-          setTimeout(check, 500);
-        } else {
-          apply();
-        }
-      };
-      check();
-    } else {
-      apply();
+    // Defer until this device's own stream goes idle — belt-and-suspenders
+    // on top of the merge (already safe to apply mid-stream) purely to
+    // avoid a visual flicker during genuine concurrent activity. Actually
+    // awaits the wait (rather than firing a detached setTimeout chain) so
+    // withSyncLock keeps the lock held for the whole wait instead of
+    // releasing it the instant this function returns.
+    while (isStreamingLocally()) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
-  })();
+
+    const merged = mergeSyncedFields(currentLocalSyncedFields(), server.state);
+    applySyncedFields(merged);
+  });
 }
 
 let sseStarted = false;
@@ -318,7 +336,7 @@ const EMPTY_SYNCED_FIELDS: SyncedFields = {
 
 function runInitialSync(): Promise<void> {
   if (migrationPromise) return migrationPromise;
-  migrationPromise = (async () => {
+  migrationPromise = withSyncLock(async () => {
     ensureSSE();
 
     let server: ServerSyncResponse;
@@ -356,7 +374,7 @@ function runInitialSync(): Promise<void> {
       const merged = mergeSyncedFields(currentLocalSyncedFields(), server.state);
       applySyncedFields(merged);
     }
-  })();
+  });
   return migrationPromise;
 }
 
@@ -382,7 +400,7 @@ export function createSyncStorage(): StateStorage {
     getItem: (name) => localStorage.getItem(name),
     setItem: (name, value) => {
       localStorage.setItem(name, value);
-      scheduleServerWrite();
+      if (!applyingRemoteUpdate) scheduleServerWrite();
     },
     removeItem: (name) => localStorage.removeItem(name),
   };
