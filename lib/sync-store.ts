@@ -48,7 +48,12 @@ function withLock<T>(fn: () => Promise<T>): Promise<T> {
 
 async function readFileRaw(): Promise<SyncFile | null> {
   try {
-    const raw = await readFile(STORE_PATH, "utf-8");
+    // STORE_PATH is only known at runtime (SYNC_STORE_PATH is an env var) —
+    // without turbopackIgnore, the build tries to statically trace it and,
+    // failing that, traces the ENTIRE project into the standalone output
+    // instead (confirmed: this was actually happening — see the deploy
+    // notes on STORE_PATH above for why that's unsafe here anyway).
+    const raw = await readFile(/* turbopackIgnore: true */ STORE_PATH, "utf-8");
     return JSON.parse(raw) as SyncFile;
   } catch (err) {
     if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
