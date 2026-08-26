@@ -8,9 +8,10 @@
 // module directly.
 //
 // In-memory pub/sub for a single self-hosted Node process (this app runs as
-// one `next start` process on a Tailscale-only host, never serverless/
-// multi-instance) — a connected SSE client is just a controller we push
-// encoded chunks into directly.
+// one `node server.js` process — the standalone build, per the
+// hermes-web-app systemd unit — on a Tailscale-only host, never
+// serverless/multi-instance) — a connected SSE client is just a controller
+// we push encoded chunks into directly.
 const clients = new Set<ReadableStreamDefaultController>();
 
 const encoder = new TextEncoder();

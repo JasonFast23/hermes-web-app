@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { AGENTS, AgentId, DEFAULT_AGENT_ID, ENABLED_AGENT_IDS } from "./agents";
+import { createSyncStorage, subscribeSyncUpdates, registerStreamingCheck } from "./syncClientStorage";
+import { markDeleted } from "./sync-tombstones";
 
 // Mirrors the shape /api/phone/calls returns (a filtered, summary-only
 // slice of Retell's v3 list-calls response) — shared between PhoneView and
@@ -1041,6 +1043,7 @@ export const useChatStore = create<ChatState>()(
         },
 
         deleteSessions: (sessionIds) => {
+          markDeleted(sessionIds);
           const idSet = new Set(sessionIds);
           set((s) => {
             const sessions = s.sessions.filter((sess) => !idSet.has(sess.id));
@@ -1389,7 +1392,7 @@ export const useChatStore = create<ChatState>()(
     },
     {
       name: "hermes-chat-store",
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => createSyncStorage()),
       version: 1,
       migrate: () => ({
         sessions: [],
@@ -1424,3 +1427,12 @@ export const useChatStore = create<ChatState>()(
     }
   )
 );
+
+// Wires up cross-device sync (see lib/syncClientStorage.ts) after the
+// store exists — that module can't import useChatStore itself (it's used
+// as this store's `storage`, so importing back would be circular).
+subscribeSyncUpdates((partial) => useChatStore.setState(partial));
+registerStreamingCheck(() => {
+  const s = useChatStore.getState();
+  return s.isStreaming || s.activeAbortController !== null;
+});
