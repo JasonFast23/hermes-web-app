@@ -2,6 +2,17 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+// This route runs as one long-lived Node process (see server.js), so
+// module-level state like this genuinely persists across requests — a
+// simple in-memory cache, no external store needed. Kept short: long
+// enough that the app's own bell/PhoneView instances (which already
+// de-dupe concurrent calls client-side — see fetchPhoneCalls in
+// lib/store.ts) don't each trigger a separate upstream hit on every
+// reload, short enough that a call which just ended shows up on the next
+// request rather than sitting stale for minutes.
+const CACHE_TTL_MS = 15_000;
+let cache: { calls: { call_type?: string }[]; expiresAt: number } | null = null;
+
 // The real call history for Priscilla's Retell number — every inbound
 // call she got and every outbound call Eva placed on her behalf. Only
 // lightweight metadata (date, direction, duration, the AI-generated
@@ -11,6 +22,10 @@ export const runtime = "nodejs";
 // demand via /api/phone/calls/[callId] only once someone actually opens
 // it, not upfront for the whole list.
 export async function GET() {
+  if (cache && cache.expiresAt > Date.now()) {
+    return NextResponse.json({ calls: cache.calls });
+  }
+
   const apiKey = process.env.RETELL_API_KEY;
   if (!apiKey) {
     return NextResponse.json({ error: "Server is missing RETELL_API_KEY" }, { status: 500 });
@@ -56,5 +71,6 @@ export async function GET() {
   // simulator's are "web_call".
   const calls = allCalls.filter((c) => c.call_type === "phone_call");
 
+  cache = { calls, expiresAt: Date.now() + CACHE_TTL_MS };
   return NextResponse.json({ calls });
 }

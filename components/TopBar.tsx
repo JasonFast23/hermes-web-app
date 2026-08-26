@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useChatStore } from "@/lib/store";
 import { listAudioDevices } from "@/lib/audioDevices";
+import { formatPhoneNumber } from "./PhoneView";
 import { MenuIcon, PlusIcon, SpeakerIcon, SpeakerMutedIcon, BellIcon, BellOffIcon } from "./Icons";
 import { isNotificationsMuted, setNotificationsMuted } from "@/lib/notifications";
 
@@ -12,8 +13,23 @@ import { isNotificationsMuted, setNotificationsMuted } from "@/lib/notifications
 const SUPPORTS_OUTPUT_SELECTION =
   typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
 
+// A notice, here, is a call Eva flagged as needing Priscilla's follow-up
+// (call_analysis.custom_analysis_data.priscilla_follow_up — see PhoneView)
+// — this is the same signal that already drives the toast in
+// NotificationListener, just kept around as a persistent list instead of
+// fading after 5 seconds. "Unread" is tracked separately from the mute
+// toggle below (which only controls whether new toasts pop up); opening
+// this dropdown is what actually clears the badge.
 function NotificationBell() {
+  const [open, setOpen] = useState(false);
   const [muted, setMuted] = useState(false);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const setView = useChatStore((s) => s.setView);
+  const setPendingPhoneCallToOpen = useChatStore((s) => s.setPendingPhoneCallToOpen);
+  const phoneCalls = useChatStore((s) => s.phoneCalls);
+  const fetchPhoneCalls = useChatStore((s) => s.fetchPhoneCalls);
+  const seenFollowUpCallIds = useChatStore((s) => s.seenFollowUpCallIds);
+  const markFollowUpsSeen = useChatStore((s) => s.markFollowUpsSeen);
 
   useEffect(() => {
     // One-time read of the persisted mute flag on mount — deferred to an
@@ -22,26 +38,102 @@ function NotificationBell() {
     // mismatch.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setMuted(isNotificationsMuted());
-  }, []);
+    // Fetches (or reuses PhoneView's cache — see fetchPhoneCalls) so the
+    // badge is accurate without needing the Phone tab to have been opened
+    // first, and doubles as a warm-up: by the time someone does open that
+    // tab, the list is usually already cached.
+    fetchPhoneCalls();
+  }, [fetchPhoneCalls]);
 
-  const toggle = () => {
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [open]);
+
+  const followUps = (phoneCalls ?? []).filter((c) => c.call_analysis?.custom_analysis_data?.priscilla_follow_up);
+  const unreadCount = followUps.filter((c) => !seenFollowUpCallIds.includes(c.call_id)).length;
+
+  const toggleOpen = () => {
+    setOpen((prev) => {
+      const next = !prev;
+      if (next && followUps.length > 0) markFollowUpsSeen(followUps.map((c) => c.call_id));
+      return next;
+    });
+  };
+
+  const toggleMute = () => {
     const next = !muted;
     setNotificationsMuted(next);
     setMuted(next);
   };
 
-  const label = muted ? "Notifications muted — click to unmute" : "Notifications enabled — click to mute";
+  const openCall = (callId: string) => {
+    setView("phone");
+    setPendingPhoneCallToOpen(callId);
+    setOpen(false);
+  };
 
   return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      onClick={toggle}
-      className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-black/[0.04]"
-    >
-      {muted ? <BellOffIcon className="h-[18px] w-[18px]" /> : <BellIcon className="h-[18px] w-[18px]" />}
-    </button>
+    <div className="relative" ref={popoverRef}>
+      <button
+        type="button"
+        aria-label={unreadCount > 0 ? `${unreadCount} unread call notice${unreadCount === 1 ? "" : "s"}` : "Call notices"}
+        title="Call notices"
+        onClick={toggleOpen}
+        className="relative flex h-10 w-10 items-center justify-center rounded-md hover:bg-black/[0.04]"
+      >
+        <BellIcon className="h-5 w-5" />
+        {unreadCount > 0 && (
+          <span className="absolute right-1.5 top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-medium leading-none text-white">
+            {unreadCount > 9 ? "9+" : unreadCount}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-10 z-10 w-80 rounded-xl border border-black/[0.06] bg-white shadow-lg">
+          <div className="max-h-80 overflow-y-auto p-2">
+            {followUps.length === 0 ? (
+              <p className="px-3 py-6 text-center text-[12.5px] text-zinc-400">No call notices yet.</p>
+            ) : (
+              followUps.map((call) => {
+                const counterpart = call.direction === "inbound" ? call.from_number : call.to_number;
+                return (
+                  <button
+                    key={call.call_id}
+                    type="button"
+                    onClick={() => openCall(call.call_id)}
+                    className="flex w-full flex-col gap-0.5 rounded-lg px-3 py-2 text-left hover:bg-black/[0.04]"
+                  >
+                    <span className="text-[12.5px] font-medium text-zinc-800">{formatPhoneNumber(counterpart)}</span>
+                    <span className="line-clamp-2 text-[12px] text-zinc-500">
+                      {call.call_analysis?.custom_analysis_data?.priscilla_follow_up}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+          <div className="flex items-center justify-between border-t border-black/[0.06] px-3 py-2">
+            <span className="text-[12px] text-zinc-500">Notifications</span>
+            <button
+              type="button"
+              onClick={toggleMute}
+              className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-zinc-600 hover:bg-black/[0.04]"
+            >
+              {muted ? <BellOffIcon className="h-3.5 w-3.5" /> : <BellIcon className="h-3.5 w-3.5" />}
+              {muted ? "Off" : "On"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -102,14 +194,14 @@ export function TopBar() {
   }, [open]);
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b border-black/[0.06] px-2 pt-[env(safe-area-inset-top)] md:justify-end md:px-4">
+    <header className="flex min-h-[calc(3.5rem+env(safe-area-inset-top))] shrink-0 items-center justify-between border-b border-black/[0.06] px-2 pt-[env(safe-area-inset-top)] md:justify-end md:px-4">
       <button
         type="button"
         aria-label="Open menu"
         onClick={() => setMobileSidebarOpen(true)}
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-black/[0.04] md:hidden"
+        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-black/[0.04] md:hidden"
       >
-        <MenuIcon className="h-[19px] w-[19px]" />
+        <MenuIcon className="h-5 w-5" />
       </button>
 
       <span className="truncate text-[15px] font-medium text-zinc-700 md:hidden">Eva</span>
@@ -120,9 +212,9 @@ export function TopBar() {
           aria-label="New session"
           title="New session"
           onClick={() => startNewSession()}
-          className="flex h-9 w-9 items-center justify-center rounded-md hover:bg-black/[0.04] md:hidden"
+          className="flex h-10 w-10 items-center justify-center rounded-md hover:bg-black/[0.04] md:hidden"
         >
-          <PlusIcon className="h-[18px] w-[18px]" />
+          <PlusIcon className="h-5 w-5" />
         </button>
 
         <NotificationBell />
@@ -131,12 +223,12 @@ export function TopBar() {
           type="button"
           aria-label="Voice settings"
           onClick={() => setOpen((o) => !o)}
-          className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-black/[0.04]"
+          className="flex h-10 w-10 items-center justify-center rounded-md hover:bg-black/[0.04]"
         >
           {voiceVolume === 0 ? (
-            <SpeakerMutedIcon className="h-[18px] w-[18px]" />
+            <SpeakerMutedIcon className="h-5 w-5" />
           ) : (
-            <SpeakerIcon className="h-[18px] w-[18px]" />
+            <SpeakerIcon className="h-5 w-5" />
           )}
         </button>
 

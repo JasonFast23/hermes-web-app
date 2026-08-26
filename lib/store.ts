@@ -2,6 +2,26 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { AGENTS, AgentId, DEFAULT_AGENT_ID, ENABLED_AGENT_IDS } from "./agents";
 
+// Mirrors the shape /api/phone/calls returns (a filtered, summary-only
+// slice of Retell's v3 list-calls response) — shared between PhoneView and
+// TopBar's notification bell so both read the one cached copy in this
+// store instead of each fetching and typing it separately.
+export interface CallSummary {
+  call_id: string;
+  direction?: "inbound" | "outbound" | string;
+  from_number?: string;
+  to_number?: string;
+  start_timestamp?: number;
+  duration_ms?: number;
+  call_status?: string;
+  call_analysis?: {
+    call_summary?: string;
+    user_sentiment?: string;
+    call_successful?: boolean;
+    custom_analysis_data?: { priscilla_follow_up?: string };
+  };
+}
+
 export interface ToolEvent {
   id: string;
   tool: string;
@@ -159,6 +179,22 @@ interface ChatState {
   // Never persisted, purely a one-shot navigation hint, same pattern as
   // scrollToMessage below.
   pendingPhoneCallToOpen: string | null;
+  // Cached list of real (non-test) phone calls from /api/phone/calls,
+  // shared between PhoneView and TopBar's notification bell so whichever
+  // one asks first fetches for both — opening the Phone tab after the
+  // bell has already loaded it (or vice versa) is instant instead of
+  // showing a spinner every time. Persisted so even a cold app start
+  // shows the last-known list immediately while fetchPhoneCalls quietly
+  // refreshes it in the background.
+  phoneCalls: CallSummary[] | null;
+  phoneCallsFetchedAt: number | null;
+  phoneCallsLoading: boolean;
+  phoneCallsError: string | null;
+  // call_ids whose Priscilla follow-up notice has already been shown in
+  // the bell's dropdown — drives its unread badge count. Persisted so
+  // read state survives a reload instead of every follow-up reappearing
+  // as unread.
+  seenFollowUpCallIds: string[];
   // 0 (silent) to 1 (full) — controls playback volume for Eva's spoken
   // replies in VoiceSession. Persisted like other UI preferences below.
   voiceVolume: number;
@@ -222,6 +258,11 @@ interface ChatState {
   approvePhoneCall: () => Promise<string>;
   declinePhoneCall: () => void;
   setPendingPhoneCallToOpen: (callId: string | null) => void;
+  // Stale-while-revalidate: a no-op if a fetch is already in flight, or if
+  // the cache is younger than PHONE_CALLS_STALE_MS and opts.force isn't
+  // set — callers don't need to reason about that, just call it on mount.
+  fetchPhoneCalls: (opts?: { force?: boolean }) => Promise<void>;
+  markFollowUpsSeen: (callIds: string[]) => void;
   toggleSidebar: () => void;
   setMobileSidebarOpen: (open: boolean) => void;
   setVoiceVolume: (volume: number) => void;
@@ -276,6 +317,13 @@ const PHONE_TASK_PATTERN = /^([+()\-\s\d]{7,})\|([\s\S]+)$/;
 // turn can chain through, so a model that keeps re-delegating can't loop
 // forever.
 const MAX_DELEGATION_HOPS = 5;
+
+// How long a cached phone-calls list is trusted before fetchPhoneCalls
+// treats it as worth re-fetching. Short enough that a call which just
+// ended shows up on the next tab visit/bell open without a manual reload,
+// long enough that switching between the Phone tab and elsewhere a few
+// times in a row doesn't re-hit the API (and, behind it, Retell) every time.
+const PHONE_CALLS_STALE_MS = 20_000;
 
 // crypto.randomUUID() only exists in a secure context (HTTPS, or
 // localhost). This app is also reachable over plain HTTP on a private
@@ -914,6 +962,11 @@ export const useChatStore = create<ChatState>()(
         mobileSidebarOpen: false,
         view: "chat",
         pendingPhoneCallToOpen: null,
+        phoneCalls: null,
+        phoneCallsFetchedAt: null,
+        phoneCallsLoading: false,
+        phoneCallsError: null,
+        seenFollowUpCallIds: [],
         voiceVolume: 1,
         researchFastMode: true,
         voiceOpen: false,
@@ -1001,6 +1054,30 @@ export const useChatStore = create<ChatState>()(
         toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
         setMobileSidebarOpen: (open) => set({ mobileSidebarOpen: open }),
         setPendingPhoneCallToOpen: (callId) => set({ pendingPhoneCallToOpen: callId }),
+
+        fetchPhoneCalls: async (opts) => {
+          const force = opts?.force ?? false;
+          const state = get();
+          if (state.phoneCallsLoading) return;
+          if (!force && state.phoneCallsFetchedAt && Date.now() - state.phoneCallsFetchedAt < PHONE_CALLS_STALE_MS) {
+            return;
+          }
+          set({ phoneCallsLoading: true, phoneCallsError: null });
+          try {
+            const res = await fetch("/api/phone/calls");
+            if (!res.ok) throw new Error("Failed to load call history");
+            const data: { calls: CallSummary[] } = await res.json();
+            set({ phoneCalls: data.calls, phoneCallsFetchedAt: Date.now(), phoneCallsLoading: false });
+          } catch (err) {
+            set({
+              phoneCallsError: err instanceof Error ? err.message : "Failed to load call history",
+              phoneCallsLoading: false,
+            });
+          }
+        },
+
+        markFollowUpsSeen: (callIds) =>
+          set((s) => ({ seenFollowUpCallIds: Array.from(new Set([...s.seenFollowUpCallIds, ...callIds])) })),
 
         // Cancels whatever request is currently in flight — including a
         // delegated hand-off, since only one streamChatCompletion call is
@@ -1331,6 +1408,9 @@ export const useChatStore = create<ChatState>()(
         voiceVolume: state.voiceVolume,
         audioInputDeviceId: state.audioInputDeviceId,
         audioOutputDeviceId: state.audioOutputDeviceId,
+        phoneCalls: state.phoneCalls,
+        phoneCallsFetchedAt: state.phoneCallsFetchedAt,
+        seenFollowUpCallIds: state.seenFollowUpCallIds,
       }),
       // A browser that persisted activeAgentId before Case File was
       // disabled (e.g. "rag") would otherwise silently keep driving the

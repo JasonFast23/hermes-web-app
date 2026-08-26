@@ -2,31 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RetellWebClient } from "retell-client-js-sdk";
-import { useChatStore } from "@/lib/store";
+import { CallSummary, useChatStore } from "@/lib/store";
 import { MenuIcon, PhoneIcon } from "./Icons";
-
-interface CallSummary {
-  call_id: string;
-  direction?: "inbound" | "outbound" | string;
-  from_number?: string;
-  to_number?: string;
-  start_timestamp?: number;
-  duration_ms?: number;
-  call_status?: string;
-  call_analysis?: {
-    call_summary?: string;
-    user_sentiment?: string;
-    call_successful?: boolean;
-    // Custom post-call-analysis field configured on the Retell agent —
-    // extracted by Retell itself from the transcript after each call, and
-    // separately relayed as a notification toast by the phone bridge's
-    // webhook handler (hermes-phone-bridge/server.js, a different
-    // project) once it's ready. Set only when Eva told the caller she'd
-    // have Priscilla follow up on something; empty/absent means nothing
-    // needs action.
-    custom_analysis_data?: { priscilla_follow_up?: string };
-  };
-}
 
 interface CallDetail extends CallSummary {
   transcript?: string;
@@ -351,24 +328,19 @@ export function PhoneView() {
   const setMobileSidebarOpen = useChatStore((s) => s.setMobileSidebarOpen);
   const pendingPhoneCallToOpen = useChatStore((s) => s.pendingPhoneCallToOpen);
   const setPendingPhoneCallToOpen = useChatStore((s) => s.setPendingPhoneCallToOpen);
-  const [calls, setCalls] = useState<CallSummary[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Cached in the store (see fetchPhoneCalls) rather than local state — the
+  // bell in TopBar fetches the same list, so whichever mounts first is the
+  // one that actually hits the network; opening this tab afterward shows
+  // the cached result instantly while a background refresh (if the cache
+  // is stale) quietly updates it.
+  const calls = useChatStore((s) => s.phoneCalls);
+  const error = useChatStore((s) => s.phoneCallsError);
+  const fetchPhoneCalls = useChatStore((s) => s.fetchPhoneCalls);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    fetch("/api/phone/calls")
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error("Failed to load call history"))))
-      .then((data: { calls: CallSummary[] }) => {
-        if (!cancelled) setCalls(data.calls);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load call history");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    fetchPhoneCalls();
+  }, [fetchPhoneCalls]);
 
   // A notification toast for a specific call was clicked (see
   // NotificationListener) — jump straight to it instead of the list, then
@@ -408,14 +380,14 @@ export function PhoneView() {
 
   return (
     <section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#f4f6fb]">
-      <div className="flex h-14 shrink-0 items-center gap-1 border-b border-black/[0.06] px-3 pt-[env(safe-area-inset-top)] sm:px-6">
+      <div className="flex min-h-[calc(3.5rem+env(safe-area-inset-top))] shrink-0 items-center gap-1 border-b border-black/[0.06] px-3 pt-[env(safe-area-inset-top)] sm:px-6">
         <button
           type="button"
           aria-label="Open menu"
           onClick={() => setMobileSidebarOpen(true)}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-black/[0.04] md:hidden"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-black/[0.04] md:hidden"
         >
-          <MenuIcon className="h-[19px] w-[19px]" />
+          <MenuIcon className="h-5 w-5" />
         </button>
         <h1 className="text-xl font-semibold text-zinc-800">Phone</h1>
       </div>
