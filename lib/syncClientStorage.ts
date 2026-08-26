@@ -106,6 +106,22 @@ function currentLocalSyncedFields(): SyncedFields {
   return extractSyncedFields(envelope?.state ?? {});
 }
 
+// Tracks the last synced-fields snapshot this device has either pushed or
+// applied, so setItem (below) can tell a genuine change to the 4 shared
+// fields apart from zustand persist calling setItem for literally any
+// OTHER persisted field changing too (activeSessionId, activeAgentId,
+// sidebarCollapsed, ...) — e.g. just switching tabs. Without this
+// comparison, switching tabs on one device — a purely local, unsynced
+// action — still scheduled a push of whatever `sessions` happened to be
+// sitting in THIS device's localStorage, which could easily be stale
+// relative to another device's actively-streaming message and clobber it
+// on the server the moment a version check happened to still pass.
+let lastKnownSyncedFieldsJson: string | null = null;
+
+function syncedFieldsJson(state: Record<string, unknown>): string {
+  return JSON.stringify(extractSyncedFields(state));
+}
+
 // Writes the given synced fields into whatever's currently in localStorage
 // (rather than overwriting the whole envelope) so untouched, per-device
 // fields (activeSessionId, sidebarCollapsed, etc.) are never disturbed,
@@ -116,6 +132,7 @@ function applySyncedFields(fields: Partial<SyncedFields>) {
   const envelope = readEnvelope();
   const state = { ...(envelope?.state ?? {}), ...fields };
   localStorage.setItem(STORE_KEY, JSON.stringify({ state, version: envelope?.version ?? 1 }));
+  lastKnownSyncedFieldsJson = syncedFieldsJson(state);
   applyRemote(fields);
 }
 
@@ -247,6 +264,7 @@ async function pushToServer(attempt = 0): Promise<void> {
   const result = await putServerState(lastKnownVersion, fields);
   if (result.ok) {
     lastKnownVersion = result.version;
+    lastKnownSyncedFieldsJson = JSON.stringify(fields);
     return;
   }
 
@@ -400,7 +418,24 @@ export function createSyncStorage(): StateStorage {
     getItem: (name) => localStorage.getItem(name),
     setItem: (name, value) => {
       localStorage.setItem(name, value);
-      if (!applyingRemoteUpdate) scheduleServerWrite();
+      if (applyingRemoteUpdate) return;
+
+      // Only schedule a push if one of the 4 actually-shared fields
+      // changed — persist calls setItem for ANY persisted field (switching
+      // tabs, muting notifications, picking a mic), and none of those have
+      // anything to do with cross-device history. See
+      // lastKnownSyncedFieldsJson's comment for why this matters.
+      let fields: Record<string, unknown>;
+      try {
+        fields = (JSON.parse(value) as PersistEnvelope).state ?? {};
+      } catch {
+        scheduleServerWrite();
+        return;
+      }
+      const fieldsJson = syncedFieldsJson(fields);
+      if (fieldsJson === lastKnownSyncedFieldsJson) return;
+      lastKnownSyncedFieldsJson = fieldsJson;
+      scheduleServerWrite();
     },
     removeItem: (name) => localStorage.removeItem(name),
   };
