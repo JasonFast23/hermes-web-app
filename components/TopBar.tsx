@@ -60,11 +60,9 @@ function NotificationBell() {
   const unreadCount = followUps.filter((c) => !seenFollowUpCallIds.includes(c.call_id)).length;
 
   const toggleOpen = () => {
-    setOpen((prev) => {
-      const next = !prev;
-      if (next && followUps.length > 0) markFollowUpsSeen(followUps.map((c) => c.call_id));
-      return next;
-    });
+    const next = !open;
+    if (next && followUps.length > 0) markFollowUpsSeen(followUps.map((c) => c.call_id));
+    setOpen(next);
   };
 
   const toggleMute = () => {
