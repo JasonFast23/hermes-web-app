@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { AGENTS, AgentId, DEFAULT_AGENT_ID, ENABLED_AGENT_IDS } from "./agents";
-import { createSyncStorage, subscribeSyncUpdates, registerStreamingCheck } from "./syncClientStorage";
+import { createSyncStorage, subscribeSyncUpdates, registerStreamingCheck, whenSyncReady } from "./syncClientStorage";
 import { markDeleted } from "./sync-tombstones";
 
 // Mirrors the shape /api/phone/calls returns (a filtered, summary-only
@@ -1168,6 +1168,13 @@ export const useChatStore = create<ChatState>()(
           const trimmed = text.trim();
           if (!trimmed || get().isStreaming) return;
 
+          // Waits for cross-device sync's one-time migration (if still in
+          // flight — e.g. the very first message on a device right after
+          // opening it) so ensureActiveSession never creates a session that
+          // migration's next step would otherwise silently overwrite. Only
+          // matters once per device load — resolves immediately after.
+          await whenSyncReady();
+
           const agentId = get().activeAgentId;
           const session = ensureActiveSession();
           const sessionId = session.id;
@@ -1337,6 +1344,10 @@ export const useChatStore = create<ChatState>()(
         askEva: async (message, onToolEvent, onDelta) => {
           const trimmed = message.trim();
           if (!trimmed) return "";
+
+          // See sendMessage's identical guard — protects the same race for
+          // the voice pipeline's first turn on a device.
+          await whenSyncReady();
 
           const agentId: AgentId = "jarvis";
           const session = ensureActiveSession();

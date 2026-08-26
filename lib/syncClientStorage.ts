@@ -258,6 +258,11 @@ function isStreamingLocally(): boolean {
 
 function reconcileFromServer() {
   void (async () => {
+    // Let the one-time migration (if still in flight) finish and apply
+    // first, so a live push received right at startup can't race it —
+    // without this, both could call applySyncedFields concurrently with
+    // stale views of lastKnownVersion/localStorage.
+    if (migrationPromise) await migrationPromise;
     const server = await fetchServerState();
     if (server.version <= lastKnownVersion || !server.state) return;
     lastKnownVersion = server.version;
@@ -353,6 +358,18 @@ function runInitialSync(): Promise<void> {
     }
   })();
   return migrationPromise;
+}
+
+// Lets a caller (lib/store.ts's sendMessage/askEva) wait for the one-time
+// migration to settle before creating a new session — without this, a
+// message sent in the brief window between page load and this resolving
+// gets silently erased when the migration's applySyncedFields finally
+// lands and overwrites `sessions` with the (older) snapshot it fetched
+// before that message ever existed. Resolves immediately once sync has
+// never been initialized at all (shouldn't happen in practice — store.ts
+// always uses createSyncStorage — but avoids ever hanging on a null promise).
+export function whenSyncReady(): Promise<void> {
+  return migrationPromise ?? Promise.resolve();
 }
 
 // ---- the StateStorage zustand's persist middleware actually uses ----
