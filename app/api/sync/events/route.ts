@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { addClient, removeClient } from "@/lib/sync-broadcast";
 import { readSyncState } from "@/lib/sync-store";
+import { BUILD_ID } from "@/lib/build-id";
 
 export const runtime = "nodejs";
 
@@ -18,16 +19,24 @@ export async function GET(req: NextRequest) {
       // go unnoticed until the next change.
       try {
         const current = await readSyncState();
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ version: current?.version ?? 0 })}\n\n`));
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ version: current?.version ?? 0, buildId: BUILD_ID })}\n\n`));
       } catch {
         // Best-effort — the client still gets the same version from its own
         // GET /api/sync, so a failure here just skips the early nudge.
       }
-      // Periodic comment ping — keeps intermediary proxies/timeouts from
-      // silently dropping an idle connection.
-      keepAlive = setInterval(() => {
+      // Periodic message — doubles as the keepalive (any traffic keeps
+      // intermediary proxies/timeouts from dropping an idle connection)
+      // and as a standing staleness check: a client that's been open for
+      // hours (a long-lived Electron window, a browser tab never closed)
+      // gets its buildId re-checked every 30s even if nothing has actually
+      // synced in that time, not just on connect — see
+      // lib/syncClientStorage.ts's handling of this message.
+      keepAlive = setInterval(async () => {
         try {
-          controller.enqueue(encoder.encode(`: ping\n\n`));
+          const current = await readSyncState();
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ version: current?.version ?? 0, buildId: BUILD_ID })}\n\n`)
+          );
         } catch {
           removeClient(controller);
         }

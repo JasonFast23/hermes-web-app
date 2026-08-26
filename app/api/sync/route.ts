@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { readSyncState, writeSyncState, type SyncedState } from "@/lib/sync-store";
 import { broadcast } from "@/lib/sync-broadcast";
+import { BUILD_ID } from "@/lib/build-id";
 
 export const runtime = "nodejs";
 
@@ -52,6 +53,6 @@ export async function PUT(req: NextRequest) {
     );
   }
 
-  broadcast({ version: result.version });
+  broadcast({ version: result.version, buildId: BUILD_ID });
   return Response.json({ version: result.version, updatedAt: result.updatedAt });
 }

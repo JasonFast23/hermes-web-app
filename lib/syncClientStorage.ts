@@ -17,6 +17,7 @@ import type { StateStorage } from "zustand/middleware";
 import type { AgentId } from "./agents";
 import type { ChatSession, ChatMessage, CallSummary } from "./store";
 import { getDeletedIds } from "./sync-tombstones";
+import { BUILD_ID } from "./build-id";
 
 const STORE_KEY = "hermes-chat-store";
 const MIGRATED_KEY = "hermes-chat-store-sync-migrated";
@@ -326,6 +327,28 @@ function reconcileFromServer() {
   });
 }
 
+// Fires (deferred until this device isn't itself mid-stream, so a deploy
+// landing mid-response doesn't cut it off) the moment this client's own
+// baked-in BUILD_ID no longer matches the server's — meaning a newer
+// deploy has gone live since this page loaded. A long-lived client (an
+// Electron window kept open across being "turned off and on," a browser
+// tab never closed) would otherwise keep running whatever code it loaded
+// with indefinitely; this is what guarantees it can't stay stale no
+// matter what the user does around the app — see the SSE message handler
+// below, which checks this on EVERY message (not just on connect), so
+// even a client that's been idle for hours gets caught within ~30s.
+function reloadIfStale(remoteBuildId: string | undefined) {
+  if (!remoteBuildId || remoteBuildId === BUILD_ID) return;
+  const attempt = () => {
+    if (isStreamingLocally()) {
+      setTimeout(attempt, 2000);
+      return;
+    }
+    window.location.reload();
+  };
+  attempt();
+}
+
 let sseStarted = false;
 function ensureSSE() {
   if (sseStarted || typeof window === "undefined" || typeof EventSource === "undefined") return;
@@ -333,7 +356,8 @@ function ensureSSE() {
   const source = new EventSource("/api/sync/events");
   source.onmessage = (event) => {
     try {
-      const data = JSON.parse(event.data) as { version?: number };
+      const data = JSON.parse(event.data) as { version?: number; buildId?: string };
+      reloadIfStale(data.buildId);
       if (typeof data.version === "number" && data.version > lastKnownVersion) {
         reconcileFromServer();
       }

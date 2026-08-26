@@ -49,3 +49,9 @@ android/app/keystore/
 
 # cross-device chat sync store (server-side runtime state, not source)
 /data
+
+# built Android release artifacts served for direct-download install (see
+# public/downloads/ — a built binary, not source; placed straight on the
+# server rather than committed)
+/public/downloads
+*.apk
