@@ -1,130 +1,327 @@
-// Client-side pipeline for the dictation button (components/ChatInput.tsx).
-// Captures short (~2s) segments via MediaRecorder — the same API already
-// proven reliable everywhere else in this app (the original dictation
-// button, and components/VoiceSession.tsx's full voice-conversation mode)
-// — and transcribes each one via the existing Groq Whisper endpoint
-// (app/api/voice/stt/route.ts). No new vendor, no new API key, no
-// AudioWorklet, no raw PCM.
+// Client-side pipeline for the dictation button (components/ChatInput.tsx):
+// mic -> resampled 16kHz PCM -> ElevenLabs Scribe v2 Realtime over a direct
+// WebSocket -> partial/committed transcript callbacks. Audio never passes
+// through our own server — only a short-lived token does (see
+// app/api/voice/stt-realtime-token/route.ts) — so this connects straight to
+// wss://api.elevenlabs.io.
 //
-// Deliberately restarts the recorder for every segment rather than using a
-// single MediaRecorder with a `timeslice`: a timeslice's later chunks
-// aren't independently-decodable audio files on their own for webm/opus
-// (only the very first chunk carries the container's init segment) — since
-// each segment here is sent as its own separate request to a stateless
-// batch transcription endpoint, it needs to be a complete, valid file on
-// its own. A full stop/start cycle per segment gives exactly that.
-//
-// Trade-off, by design: this updates in ~2-second bursts, not continuously
-// — noticeably less smooth than true low-latency streaming (which needs a
-// streaming-capable vendor we don't have an account with), but built
-// entirely from APIs already proven solid on every platform this app runs
-// on, including the Android WebView where an AudioWorklet-based approach
-// was crashing the renderer process.
-import { pickRecorderMimeType, extForMimeType } from "./audio";
+// Separate from components/VoiceSession.tsx's full voice-conversation mode,
+// which keeps its existing MediaRecorder + Groq Whisper + ElevenLabs TTS
+// pipeline untouched (lib/audio.ts's pickRecorderMimeType/extForMimeType are
+// still used there, not here).
 import { getUserMediaWithFallback } from "./audioDevices";
 
-const SEGMENT_MS = 2000;
+// Runs inside the AudioWorkletGlobalScope, not this module's scope — loaded
+// via a Blob URL so no separate static asset is needed. Buffers ~40ms of
+// native-rate samples before handing off to the main thread (per-128-sample
+// render-quantum postMessage/WebSocket-send would be ~125/sec, wasteful and
+// a plausible rate-limit target). Resamples whenever the context's actual
+// sampleRate isn't 16000 — which, now that startRealtimeDictation no
+// longer requests a specific rate from the AudioContext constructor (see
+// its comment — that request is suspected of crashing Android's WebView
+// renderer), is effectively always, on every device.
+const WORKLET_SOURCE = `
+class PcmDownsamplerProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this._buffer = [];
+    this._bufferedSamples = 0;
+    this._flushThreshold = Math.round(sampleRate * 0.04);
+    this._lpAccum = 0;
+  }
+
+  process(inputs) {
+    const input = inputs[0] && inputs[0][0];
+    if (!input) return true;
+    this._buffer.push(input.slice());
+    this._bufferedSamples += input.length;
+    if (this._bufferedSamples >= this._flushThreshold) this._flush();
+    return true;
+  }
+
+  _flush() {
+    const merged = new Float32Array(this._bufferedSamples);
+    let offset = 0;
+    for (const chunk of this._buffer) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+    this._buffer = [];
+    this._bufferedSamples = 0;
+
+    const pcm16 = this._toPcm16(merged);
+    this.port.postMessage(pcm16, [pcm16.buffer]);
+  }
+
+  _toPcm16(float32) {
+    const targetRate = 16000;
+    let samples = float32;
+    if (sampleRate !== targetRate) {
+      // Single-pole low-pass (cheap anti-aliasing) before linear-
+      // interpolation decimation — without it, high-frequency content
+      // (sibilants like /s//f/) folds back into the audible band as
+      // noise, which matters for STT accuracy more than for the ear.
+      const alpha = targetRate / sampleRate;
+      const filtered = new Float32Array(float32.length);
+      let acc = this._lpAccum;
+      for (let i = 0; i < float32.length; i++) {
+        acc += alpha * (float32[i] - acc);
+        filtered[i] = acc;
+      }
+      this._lpAccum = acc;
+
+      const ratio = sampleRate / targetRate;
+      const outLength = Math.floor(float32.length / ratio);
+      samples = new Float32Array(outLength);
+      for (let i = 0; i < outLength; i++) {
+        const srcIndex = i * ratio;
+        const i0 = Math.floor(srcIndex);
+        const i1 = Math.min(i0 + 1, filtered.length - 1);
+        const frac = srcIndex - i0;
+        samples[i] = filtered[i0] + (filtered[i1] - filtered[i0]) * frac;
+      }
+    }
+    const int16 = new Int16Array(samples.length);
+    for (let i = 0; i < samples.length; i++) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+    return int16;
+  }
+}
+registerProcessor("pcm-downsampler", PcmDownsamplerProcessor);
+`;
 
 export interface RealtimeDictationHandlers {
-  // Never fires in this implementation — kept in the interface so
-  // components/ChatInput.tsx doesn't need to change if a future revision
-  // adds real interim results.
   onPartial: (text: string) => void;
   onCommitted: (text: string) => void;
   onError: (message: string) => void;
 }
 
 export interface RealtimeDictationSession {
+  // Resolves only after the trailing words since the last VAD commit have
+  // been flushed and folded in via onCommitted, and the socket/mic are
+  // closed — never just closes immediately (see module comment above).
   stop: () => Promise<void>;
 }
 
-async function transcribe(blob: Blob, ext: string): Promise<string> {
-  const form = new FormData();
-  form.append("audio", blob, `recording.${ext}`);
-  const res = await fetch("/api/voice/stt", { method: "POST", body: form });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error || "Transcription failed");
-  return typeof data.text === "string" ? data.text.trim() : "";
+// Chunked to avoid call-stack limits on String.fromCharCode(...bytes) for
+// larger buffers.
+function base64FromInt16(int16: Int16Array): string {
+  const bytes = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength);
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
 }
 
-// Resolves once `rec`'s onstop has actually fired (MediaRecorder.stop() is
-// async — the 'stop' event, and whatever data it delivers, arrives on a
-// later tick), running whatever onstop handler was already set first.
-function stopRecorder(rec: MediaRecorder): Promise<void> {
-  return new Promise((resolve) => {
-    if (rec.state === "inactive") {
-      resolve();
-      return;
-    }
-    const prev = rec.onstop;
-    rec.onstop = (ev) => {
-      if (typeof prev === "function") prev.call(rec, ev);
-      resolve();
-    };
-    rec.stop();
-  });
+// Temporary diagnostic instrumentation — added to pin down a reported
+// Android-only "tap mic, speak, nothing happens" failure that produced no
+// JS-visible error and no console output, only ambiguous low-level
+// Chromium/AAudio activity in logcat. Prefixed so it's trivially greppable
+// (`adb logcat | grep dictation`) and easy to remove once the platform gap
+// is confirmed. Mirrors how a previous, unrelated real-time-audio bug in
+// this codebase (the reverted WebSocket TTS streaming attempt) was
+// diagnosed — see git history on components/VoiceSession.tsx.
+function log(...args: unknown[]) {
+  console.log("[dictation]", ...args);
+}
+function logError(...args: unknown[]) {
+  console.error("[dictation]", ...args);
 }
 
 export async function startRealtimeDictation(
   preferredInputId: string | null,
   handlers: RealtimeDictationHandlers
 ): Promise<RealtimeDictationSession> {
-  const stream = await getUserMediaWithFallback(preferredInputId);
-  const mimeType = pickRecorderMimeType();
+  log("starting");
+  // Deliberately NOT requesting { sampleRate: 16000 } here — confirmed via
+  // live device logcat that this exact combination (a non-default
+  // AudioContext sample rate + AudioWorklet) crashed Android's WebView
+  // renderer process ("Scheduling restart of crashed service
+  // .../SandboxedProcessService0"). Using the device's own default rate
+  // instead and always resampling in the worklet (see _toPcm16 below,
+  // which already handles srcRate !== 16000 — this just makes that the
+  // only path instead of a conditional one) avoids the specific
+  // constructor option suspected of triggering it.
+  const audioContext = new AudioContext();
+  log("AudioContext created, actual sampleRate =", audioContext.sampleRate, "state =", audioContext.state);
 
+  const workletUrl = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "application/javascript" }));
+  const workletReady = audioContext.audioWorklet
+    .addModule(workletUrl)
+    .then(() => log("worklet module loaded"))
+    .catch((err) => {
+      logError("worklet module failed to load:", err);
+      throw err;
+    })
+    .finally(() => {
+      URL.revokeObjectURL(workletUrl);
+    });
+
+  const [, stream, tokenRes] = await Promise.all([
+    workletReady,
+    getUserMediaWithFallback(preferredInputId).then((s) => {
+      log(
+        "getUserMedia resolved, tracks:",
+        s.getAudioTracks().map((t) => ({ label: t.label, readyState: t.readyState, settings: t.getSettings() }))
+      );
+      return s;
+    }),
+    fetch("/api/voice/stt-realtime-token", { method: "POST" }).then((r) => {
+      log("token fetch responded, ok =", r.ok, "status =", r.status);
+      return r;
+    }),
+  ]);
+
+  if (!tokenRes.ok) {
+    logError("token fetch failed, status =", tokenRes.status);
+    stream.getTracks().forEach((t) => t.stop());
+    await audioContext.close();
+    throw new Error("Failed to start dictation");
+  }
+  const tokenData: { token?: string } = await tokenRes.json();
+  if (!tokenData.token) {
+    logError("token response missing token field");
+    stream.getTracks().forEach((t) => t.stop());
+    await audioContext.close();
+    throw new Error("Failed to start dictation");
+  }
+  log("token minted");
+
+  const params = new URLSearchParams({
+    token: tokenData.token,
+    model_id: "scribe_v2_realtime",
+    audio_format: "pcm_16000",
+    commit_strategy: "vad",
+    no_verbatim: "true",
+    language_code: "en",
+    // ElevenLabs' own default is 1.5s of silence before a phrase commits
+    // (confirmed via session_started's echoed config) — with normal
+    // conversational pauses shorter than that, text sits in the
+    // constantly-revising "partial" state for long stretches, which reads
+    // as sticky rather than smooth. Committing sooner means text visibly
+    // settles more often.
+    vad_silence_threshold_secs: "0.5",
+  });
+  log("opening websocket");
+  const ws = new WebSocket(`wss://api.elevenlabs.io/v1/speech-to-text/realtime?${params.toString()}`);
+
+  const source = audioContext.createMediaStreamSource(stream);
+  const worklet = new AudioWorkletNode(audioContext, "pcm-downsampler");
+  worklet.onprocessorerror = (err) => logError("worklet processor errored:", err);
+
+  let sessionReady = false;
   let stopping = false;
-  let recorder: MediaRecorder | null = null;
-  let segmentTimer: ReturnType<typeof setTimeout> | null = null;
-  // Serializes transcribe() calls so an out-of-order network response can't
-  // append a later segment's text before an earlier one's — each segment
-  // waits for the previous segment's transcription to resolve first.
-  let pending: Promise<void> = Promise.resolve();
+  let stopResolve: (() => void) | null = null;
+  let flushTimeout: ReturnType<typeof setTimeout> | null = null;
+  let chunksSent = 0;
 
-  const startSegment = () => {
-    if (stopping) return;
-    const rec = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-    recorder = rec;
-    const chunks: Blob[] = [];
-
-    rec.ondataavailable = (e) => {
-      if (e.data.size > 0) chunks.push(e.data);
-    };
-
-    rec.onstop = () => {
-      const finalMimeType = rec.mimeType || mimeType;
-      const blob = new Blob(chunks, { type: finalMimeType });
-      if (blob.size > 0) {
-        pending = pending
-          .then(() => transcribe(blob, extForMimeType(finalMimeType)))
-          .then((text) => {
-            if (text) handlers.onCommitted(text);
-          })
-          .catch((err) => {
-            handlers.onError(err instanceof Error ? err.message : "Transcription failed");
-          });
-      }
-      if (!stopping) startSegment();
-    };
-
-    rec.start();
-    segmentTimer = setTimeout(() => {
-      if (recorder === rec && rec.state === "recording") rec.stop();
-    }, SEGMENT_MS);
+  const cleanup = () => {
+    log("cleanup, chunksSent =", chunksSent);
+    try {
+      source.disconnect();
+    } catch {
+      // already disconnected
+    }
+    try {
+      worklet.disconnect();
+    } catch {
+      // already disconnected
+    }
+    stream.getTracks().forEach((t) => t.stop());
+    void audioContext.close();
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.close();
   };
 
-  startSegment();
+  const finishStop = () => {
+    if (flushTimeout) clearTimeout(flushTimeout);
+    cleanup();
+    stopResolve?.();
+    stopResolve = null;
+  };
+
+  worklet.port.onmessage = (e: MessageEvent<Int16Array>) => {
+    if (!sessionReady || ws.readyState !== WebSocket.OPEN) return;
+    chunksSent += 1;
+    if (chunksSent === 1) log("sending first audio chunk, samples =", e.data.length);
+    ws.send(
+      JSON.stringify({
+        message_type: "input_audio_chunk",
+        audio_base_64: base64FromInt16(e.data),
+        sample_rate: 16000,
+        commit: stopping,
+      })
+    );
+  };
+
+  ws.onopen = () => log("websocket open");
+
+  ws.onmessage = (e: MessageEvent<string>) => {
+    let data: { message_type?: string; text?: string; message?: string };
+    try {
+      data = JSON.parse(e.data);
+    } catch (err) {
+      logError("failed to parse WS message:", e.data, err);
+      return;
+    }
+    log("ws message:", data.message_type, data.text ? `text.length=${data.text.length}` : "");
+    switch (data.message_type) {
+      case "session_started":
+        sessionReady = true;
+        // Only start streaming once the session is confirmed live.
+        source.connect(worklet);
+        log("session_started, mic -> worklet connected");
+        break;
+      case "partial_transcript":
+        handlers.onPartial(data.text ?? "");
+        break;
+      case "committed_transcript":
+        handlers.onCommitted(data.text ?? "");
+        if (stopping) finishStop();
+        break;
+      default:
+        // ElevenLabs' protocol has more message types than the three above
+        // (timestamp/entity variants, ~13 named error types) — route
+        // anything unrecognized or error-shaped to onError rather than
+        // silently ignoring it, so a real failure doesn't look like a
+        // dropped connection.
+        if (typeof data.message_type === "string" && data.message_type.includes("error")) {
+          logError("ws error message:", data);
+          handlers.onError(data.message ?? data.message_type);
+        }
+    }
+  };
+  ws.onerror = (err) => {
+    logError("websocket error event:", err);
+    handlers.onError("Realtime connection failed");
+  };
+  ws.onclose = (e) => {
+    log("websocket closed, code =", e.code, "reason =", e.reason, "wasClean =", e.wasClean, "stopping =", stopping);
+    if (!stopping) handlers.onError("Realtime connection closed unexpectedly");
+  };
 
   return {
-    stop: async () => {
-      stopping = true;
-      if (segmentTimer) clearTimeout(segmentTimer);
-      if (recorder) await stopRecorder(recorder);
-      // By the time stopRecorder's promise resolves, its onstop handler
-      // (above) has already run and chained the final segment's
-      // transcribe() call onto `pending` — awaiting it now covers that
-      // last segment too, so the trailing words aren't lost.
-      await pending;
-      stream.getTracks().forEach((t) => t.stop());
-    },
+    stop: () =>
+      new Promise<void>((resolve) => {
+        log("stop() called, sessionReady =", sessionReady, "wsReadyState =", ws.readyState);
+        stopping = true;
+        stopResolve = resolve;
+        // Safety net: don't hang forever if no committed_transcript ever
+        // arrives (e.g. nothing was pending, or the server doesn't respond).
+        flushTimeout = setTimeout(finishStop, 1800);
+        if (sessionReady && ws.readyState === WebSocket.OPEN) {
+          // Forces a flush of whatever's buffered since the last VAD
+          // commit — the trailing words of the sentence someone stopped
+          // mid-way through are exactly what'd otherwise be lost.
+          ws.send(
+            JSON.stringify({ message_type: "input_audio_chunk", audio_base_64: "", sample_rate: 16000, commit: true })
+          );
+        } else {
+          finishStop();
+        }
+      }),
   };
 }
