@@ -63,12 +63,13 @@ export function ChatPanel() {
         // Hide Eva's own thread specifically — reading her reply while also
         // hearing it is what this avoids (see the voiceOpen comment in
         // lib/store.ts). Scoped to her tab only, not voiceOpen in general:
-        // delegateToAgent/runEvaAfterDelegation already switch activeAgentId
-        // to Research/Email while a hand-off is actually running, and that
-        // work was never being spoken anyway — the point is to stop reading
-        // along with your own ears, not to hide everything happening.
-        // Falling through to the normal thread view for any other tab
-        // means that work stays fully visible during a voice session.
+        // delegateToAgent switches activeAgentId to Research/Email while a
+        // hand-off is actually running (and no longer switches back once it
+        // reports), and that work was never being spoken anyway — the point
+        // is to stop reading along with your own ears, not to hide
+        // everything happening. Falling through to the normal thread view
+        // for any other tab means that work stays fully visible during a
+        // voice session.
         <div className="relative flex flex-1 flex-col items-center justify-center px-6 text-center">
           <VoiceOrb />
         </div>

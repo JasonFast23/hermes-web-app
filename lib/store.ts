@@ -890,7 +890,6 @@ export const useChatStore = create<ChatState>()(
 
         const assistantMessage: ChatMessage = { id: newId(), role: "assistant", content: "" };
         appendMessages(sessionId, "jarvis", [assistantMessage]);
-        set({ activeAgentId: "jarvis", view: "chat" });
 
         // Mirrors askEva's appendToAssistant (lib/store.ts, askEva below):
         // onDelta is how a voice session's TTS chunker hears Eva's reply as
@@ -1297,9 +1296,11 @@ export const useChatStore = create<ChatState>()(
           appendMessages(sessionId, targetAgentId, [userMessage, assistantMessage], trimmed);
 
           // Follow the hand-off live: show whichever agent is actually
-          // doing the work, then switch back to the one that delegated
-          // once it reports — so delegated work is as visible as the
-          // delegating agent's own, in both the text and voice UI.
+          // doing the work. Deliberately does NOT switch back to the
+          // delegating agent once it reports — auto-yanking the tab away
+          // mid-read (or right as the user starts reading the subagent's
+          // answer) felt rough, so the user stays on Research/Email until
+          // they switch tabs themselves.
           set({ activeAgentId: targetAgentId, view: "chat" });
 
           const appendToAssistant = (chunk: string) =>
@@ -1360,7 +1361,7 @@ export const useChatStore = create<ChatState>()(
             recordAgentActivity(sessionId, targetAgentId, failMsg);
             return failMsg;
           } finally {
-            set({ activeAgentId: fromAgentId, activeAbortController: null });
+            set({ activeAbortController: null });
           }
         },
 
