@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RetellWebClient } from "retell-client-js-sdk";
 import { CallSummary, useChatStore } from "@/lib/store";
-import { MenuIcon, PhoneIcon } from "./Icons";
+import { CheckIcon, MenuIcon, PhoneIcon, TrashIcon } from "./Icons";
 
 interface CallDetail extends CallSummary {
   transcript?: string;
@@ -38,7 +38,17 @@ function formatDateTime(ms: number | undefined): string {
   });
 }
 
-function CallRow({ call, onClick }: { call: CallSummary; onClick: () => void }) {
+function CallRow({
+  call,
+  onClick,
+  selecting,
+  selected,
+}: {
+  call: CallSummary;
+  onClick: () => void;
+  selecting?: boolean;
+  selected?: boolean;
+}) {
   const isInbound = call.direction === "inbound";
   const counterpart = isInbound ? call.from_number : call.to_number;
   const summary = call.call_analysis?.call_summary;
@@ -50,6 +60,15 @@ function CallRow({ call, onClick }: { call: CallSummary; onClick: () => void }) 
       onClick={onClick}
       className="flex w-full items-start gap-3 rounded-lg px-4 py-3 text-left transition-colors hover:bg-black/[0.03]"
     >
+      {selecting && (
+        <span
+          className={`mt-1.5 flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border transition-colors ${
+            selected ? "border-zinc-900 bg-zinc-900" : "border-zinc-300 bg-white"
+          }`}
+        >
+          {selected && <CheckIcon className="h-3 w-3 text-white" />}
+        </span>
+      )}
       <span
         className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[13px] ${
           isInbound ? "bg-emerald-100 text-emerald-700" : "bg-sky-100 text-sky-700"
@@ -115,8 +134,22 @@ function TranscriptView({ transcript }: { transcript: string }) {
 }
 
 function CallDetailPanel({ callId, onBack }: { callId: string; onBack: () => void }) {
+  const deletePhoneCalls = useChatStore((s) => s.deletePhoneCalls);
   const [detail, setDetail] = useState<CallDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    if (!window.confirm("Delete this call and its transcript? This can't be undone.")) return;
+    setDeleting(true);
+    try {
+      await deletePhoneCalls([callId]);
+      onBack();
+    } catch (err) {
+      setDeleting(false);
+      window.alert(err instanceof Error ? err.message : "Failed to delete call");
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -154,6 +187,17 @@ function CallDetailPanel({ callId, onBack }: { callId: string; onBack: () => voi
             {detail.direction === "inbound" ? "Incoming call" : "Outgoing call"} —{" "}
             {formatPhoneNumber(detail.direction === "inbound" ? detail.from_number : detail.to_number)}
           </span>
+        )}
+        {detail && (
+          <button
+            type="button"
+            aria-label="Delete call"
+            onClick={handleDelete}
+            disabled={deleting}
+            className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-400 hover:bg-red-50 hover:text-red-600 disabled:pointer-events-none disabled:opacity-40"
+          >
+            <TrashIcon className="h-4 w-4" />
+          </button>
         )}
       </div>
 
@@ -336,7 +380,11 @@ export function PhoneView() {
   const calls = useChatStore((s) => s.phoneCalls);
   const error = useChatStore((s) => s.phoneCallsError);
   const fetchPhoneCalls = useChatStore((s) => s.fetchPhoneCalls);
+  const deletePhoneCalls = useChatStore((s) => s.deletePhoneCalls);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     fetchPhoneCalls();
@@ -370,6 +418,50 @@ export function PhoneView() {
   const openCall = (callId: string) => setSelectedId(callId);
   const closeCall = () => window.history.back();
 
+  const exitSelectMode = () => {
+    setSelecting(false);
+    setSelectedIds(new Set());
+  };
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const allSelected = !!calls && calls.length > 0 && calls.every((c) => selectedIds.has(c.call_id));
+
+  const handleRowClick = (callId: string) => {
+    if (selecting) {
+      toggleSelected(callId);
+      return;
+    }
+    openCall(callId);
+  };
+
+  const handleDeleteSelected = async () => {
+    const count = selectedIds.size;
+    if (
+      !window.confirm(
+        `Delete ${count} call${count > 1 ? "s" : ""} and ${count > 1 ? "their" : "its"} transcript${count > 1 ? "s" : ""}? This can't be undone.`
+      )
+    ) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      await deletePhoneCalls([...selectedIds]);
+      exitSelectMode();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Failed to delete calls");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   if (selectedId) {
     return (
       <section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#f4f6fb]">
@@ -381,15 +473,56 @@ export function PhoneView() {
   return (
     <section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#f4f6fb]">
       <div className="flex min-h-[calc(3.5rem+env(safe-area-inset-top))] shrink-0 items-center gap-1 border-b border-black/[0.06] px-3 pt-[env(safe-area-inset-top)] sm:px-6">
-        <button
-          type="button"
-          aria-label="Open menu"
-          onClick={() => setMobileSidebarOpen(true)}
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-black/[0.04] md:hidden"
-        >
-          <MenuIcon className="h-5 w-5" />
-        </button>
-        <h1 className="text-xl font-semibold text-zinc-800">Phone</h1>
+        {selecting ? (
+          <>
+            <button
+              type="button"
+              onClick={exitSelectMode}
+              className="rounded-md px-2 py-1.5 text-[13px] font-medium text-zinc-600 hover:bg-black/[0.05]"
+            >
+              Cancel
+            </button>
+            <span className="ml-1 text-[13px] text-zinc-500">{selectedIds.size} selected</span>
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedIds(allSelected ? new Set() : new Set((calls ?? []).map((c) => c.call_id)))}
+                className="rounded-md bg-zinc-900 px-3 py-1.5 text-[13px] font-medium text-white hover:bg-zinc-700"
+              >
+                {allSelected ? "Deselect all" : "Select all"}
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteSelected}
+                disabled={selectedIds.size === 0 || deleting}
+                className="rounded-md bg-zinc-200 px-3 py-1.5 text-[13px] font-medium text-zinc-700 hover:bg-red-100 hover:text-red-600 disabled:pointer-events-none disabled:opacity-40"
+              >
+                {deleting ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              aria-label="Open menu"
+              onClick={() => setMobileSidebarOpen(true)}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-black/[0.04] md:hidden"
+            >
+              <MenuIcon className="h-5 w-5" />
+            </button>
+            <h1 className="text-xl font-semibold text-zinc-800">Phone</h1>
+            {calls && calls.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSelecting(true)}
+                className="ml-auto rounded-md bg-zinc-200 px-3 py-1.5 text-[13px] font-medium text-zinc-700 hover:bg-zinc-300"
+              >
+                Select calls
+              </button>
+            )}
+          </>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 py-2">
@@ -402,7 +535,13 @@ export function PhoneView() {
           </p>
         )}
         {calls?.map((call) => (
-          <CallRow key={call.call_id} call={call} onClick={() => openCall(call.call_id)} />
+          <CallRow
+            key={call.call_id}
+            call={call}
+            onClick={() => handleRowClick(call.call_id)}
+            selecting={selecting}
+            selected={selectedIds.has(call.call_id)}
+          />
         ))}
       </div>
     </section>

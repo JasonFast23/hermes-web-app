@@ -13,6 +13,13 @@ export const runtime = "nodejs";
 const CACHE_TTL_MS = 15_000;
 let cache: { calls: { call_type?: string }[]; expiresAt: number } | null = null;
 
+// Called by the [callId] route after a successful delete, so the list
+// doesn't keep showing a call that no longer exists for up to another
+// CACHE_TTL_MS.
+export function invalidatePhoneCallsCache() {
+  cache = null;
+}
+
 // The real call history for Priscilla's Retell number — every inbound
 // call she got and every outbound call Eva placed on her behalf. Only
 // lightweight metadata (date, direction, duration, the AI-generated

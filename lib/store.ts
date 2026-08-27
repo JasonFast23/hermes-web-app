@@ -264,6 +264,11 @@ interface ChatState {
   // the cache is younger than PHONE_CALLS_STALE_MS and opts.force isn't
   // set — callers don't need to reason about that, just call it on mount.
   fetchPhoneCalls: (opts?: { force?: boolean }) => Promise<void>;
+  // Permanently deletes from Retell (no undo — see the [callId] route's
+  // DELETE handler), then drops any that succeeded from local state.
+  // Throws if every deletion failed, so the caller can surface an error;
+  // a partial failure just silently keeps the failed ones in the list.
+  deletePhoneCalls: (callIds: string[]) => Promise<void>;
   markFollowUpsSeen: (callIds: string[]) => void;
   toggleSidebar: () => void;
   setMobileSidebarOpen: (open: boolean) => void;
@@ -1054,6 +1059,29 @@ export const useChatStore = create<ChatState>()(
           });
         },
 
+        deletePhoneCalls: async (callIds) => {
+          const results = await Promise.allSettled(
+            callIds.map((id) => fetch(`/api/phone/calls/${id}`, { method: "DELETE" }))
+          );
+          const deletedIds = new Set(
+            callIds.filter((_, i) => {
+              const r = results[i];
+              return r.status === "fulfilled" && r.value.ok;
+            })
+          );
+          if (deletedIds.size > 0) {
+            set((s) => ({ phoneCalls: s.phoneCalls?.filter((c) => !deletedIds.has(c.call_id)) ?? null }));
+          }
+          if (deletedIds.size < callIds.length) {
+            const failedCount = callIds.length - deletedIds.size;
+            throw new Error(
+              deletedIds.size === 0
+                ? "Failed to delete call" + (callIds.length > 1 ? "s" : "")
+                : `${failedCount} call${failedCount > 1 ? "s" : ""} failed to delete`
+            );
+          }
+        },
+
         toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
         setMobileSidebarOpen: (open) => set({ mobileSidebarOpen: open }),
         setPendingPhoneCallToOpen: (callId) => set({ pendingPhoneCallToOpen: callId }),
@@ -1142,10 +1170,16 @@ export const useChatStore = create<ChatState>()(
               body: JSON.stringify({ number: pending.number, purpose: pending.purpose }),
             });
             const data = await res.json().catch(() => null);
-            if (!res.ok || !data?.callId) {
+            if (!data?.callId) {
               throw new Error(data?.error || "Failed to place the call");
             }
-            text = `Calling ${data.toNumber ?? pending.number} now — you'll be able to see how it went in the Phone tab once it's done.`;
+            // Even on a non-OK response, a callId means Retell already placed
+            // the call — only the best-effort bridge purpose-registration
+            // failed, so this is a quality issue (generic greeting instead of
+            // a purposeful one), not a call failure. See route.ts for detail.
+            text = res.ok
+              ? `Calling ${data.toNumber ?? pending.number} now — you'll be able to see how it went in the Phone tab once it's done.`
+              : `Calling ${pending.number} now — Eva may open with a generic greeting since her purpose couldn't be registered with the phone bridge in time. You'll be able to see how it went in the Phone tab once it's done.`;
           } catch (err) {
             const detail = err instanceof Error ? err.message : "Failed to place the call";
             text = `⚠️ Couldn't place that call — ${detail}`;
