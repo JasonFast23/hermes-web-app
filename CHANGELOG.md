@@ -2,6 +2,10 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.15 — 2026-08-28
+
+- Fixed the Approve/Decline buttons on a delegation card becoming unreachable when Eva hands off a long task (e.g. a long email body) during a voice session — the task text had no height limit, so a long one pushed the buttons off-screen with nothing scrollable to reach them. The task/purpose text is now capped and scrolls internally instead.
+
 ## 1.0.14 — 2026-08-28
 
 - Fixed the dictation button being laggy on Android — the same screen-timeout network throttling that voice mode was fixed for (1.0.9) was never applied to dictation, since it has its own separate audio pipeline. Both now share one wake-lock helper, so any future audio feature gets this protection automatically instead of needing to remember it.

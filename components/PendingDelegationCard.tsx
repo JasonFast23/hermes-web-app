@@ -33,7 +33,9 @@ export function PendingDelegationCard() {
         <p className="text-sm text-zinc-700">
           Eva wants to call <span className="font-medium">{formatPhoneNumber(pendingPhoneCall.number)}</span>:
         </p>
-        <p className="mt-1 text-sm italic text-zinc-500">&ldquo;{pendingPhoneCall.purpose}&rdquo;</p>
+        <p className="mt-1 max-h-[30vh] overflow-y-auto text-sm italic text-zinc-500">
+          &ldquo;{pendingPhoneCall.purpose}&rdquo;
+        </p>
         <div className="mt-3 flex gap-2">
           <button
             type="button"
@@ -64,7 +66,9 @@ export function PendingDelegationCard() {
       <p className="text-sm text-zinc-700">
         Eva wants to hand this to <span className="font-medium">{target.name}</span>:
       </p>
-      <p className="mt-1 text-sm italic text-zinc-500">&ldquo;{pendingDelegation.task}&rdquo;</p>
+      <p className="mt-1 max-h-[30vh] overflow-y-auto text-sm italic text-zinc-500">
+        &ldquo;{pendingDelegation.task}&rdquo;
+      </p>
       <div className="mt-3 flex gap-2">
         <button
           type="button"
