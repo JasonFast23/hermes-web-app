@@ -10,6 +10,7 @@
 // pipeline untouched (lib/audio.ts's pickRecorderMimeType/extForMimeType are
 // still used there, not here).
 import { getUserMediaWithFallback } from "./audioDevices";
+import { holdScreenAwake } from "./wakeLock";
 
 // Runs inside the AudioWorkletGlobalScope, not this module's scope — loaded
 // via a Blob URL so no separate static asset is needed. Buffers ~40ms of
@@ -137,6 +138,12 @@ export async function startRealtimeDictation(
   handlers: RealtimeDictationHandlers
 ): Promise<RealtimeDictationSession> {
   log("starting");
+  // Same Android screen-timeout throttling that hit voice mode (see
+  // lib/wakeLock.ts) also hits dictation — a tap-to-start, speak-with-
+  // pauses interaction leaves plenty of idle time for the screen to time
+  // out mid-session. Released in cleanup() below, whenever/however the
+  // session ends.
+  const wakeLock = holdScreenAwake();
   // Deliberately NOT requesting { sampleRate: 16000 } here — confirmed via
   // live device logcat that this exact combination (a non-default
   // AudioContext sample rate + AudioWorklet) crashed Android's WebView
@@ -178,6 +185,7 @@ export async function startRealtimeDictation(
 
   if (!tokenRes.ok) {
     logError("token fetch failed, status =", tokenRes.status);
+    wakeLock.release();
     stream.getTracks().forEach((t) => t.stop());
     await audioContext.close();
     throw new Error("Failed to start dictation");
@@ -185,6 +193,7 @@ export async function startRealtimeDictation(
   const tokenData: { token?: string } = await tokenRes.json();
   if (!tokenData.token) {
     logError("token response missing token field");
+    wakeLock.release();
     stream.getTracks().forEach((t) => t.stop());
     await audioContext.close();
     throw new Error("Failed to start dictation");
@@ -221,6 +230,7 @@ export async function startRealtimeDictation(
 
   const cleanup = () => {
     log("cleanup, chunksSent =", chunksSent);
+    wakeLock.release();
     try {
       source.disconnect();
     } catch {

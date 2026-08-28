@@ -5,6 +5,7 @@ import { useChatStore } from "@/lib/store";
 import { pickRecorderMimeType, extForMimeType } from "@/lib/audio";
 import { getUserMediaWithFallback, applyAudioOutput } from "@/lib/audioDevices";
 import { voiceAudioLevelRef } from "@/lib/voiceAudioLevel";
+import { holdScreenAwake } from "@/lib/wakeLock";
 import { XIcon } from "./Icons";
 
 type Status =
@@ -217,48 +218,11 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
   // Holds the screen awake for the whole voice session, not just while
   // actively recording — a voice turn is mostly passive waiting (STT,
   // then Eva thinking, then her speaking), exactly the kind of idle
-  // period that trips a phone's screen timeout. Once the screen locks,
-  // Android suspends/throttles network activity for the backgrounded
-  // app, which is what turned an ordinarily-sub-second STT request into
-  // an 18+ second one during testing — a desktop browser tab doesn't get
-  // throttled this way, which is why this was Android-only. The Wake
-  // Lock API auto-releases whenever the tab/app actually goes to the
-  // background (switching apps, screen off via power button) — that's
-  // by design and fine, since there's nothing to keep alive for once the
-  // user has genuinely left; the visibilitychange listener just
-  // re-acquires it if they come back mid-session instead of leaving the
-  // session permanently unprotected after the first interruption.
+  // period that trips a phone's screen timeout. See lib/wakeLock.ts for
+  // why this matters on Android specifically.
   useEffect(() => {
-    if (!("wakeLock" in navigator)) return;
-    let lock: WakeLockSentinel | null = null;
-    let cancelled = false;
-
-    const acquire = async () => {
-      try {
-        const sentinel = await navigator.wakeLock.request("screen");
-        if (cancelled) {
-          void sentinel.release();
-          return;
-        }
-        lock = sentinel;
-      } catch {
-        // Denied/unsupported in this context — voice mode still works,
-        // just without the screen-timeout protection.
-      }
-    };
-
-    void acquire();
-
-    const handleVisibility = () => {
-      if (document.visibilityState === "visible" && !lock) void acquire();
-    };
-    document.addEventListener("visibilitychange", handleVisibility);
-
-    return () => {
-      cancelled = true;
-      document.removeEventListener("visibilitychange", handleVisibility);
-      void lock?.release();
-    };
+    const wakeLock = holdScreenAwake();
+    return () => wakeLock.release();
   }, []);
 
   const revokeObjectUrl = () => {

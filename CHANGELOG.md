@@ -2,6 +2,10 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.14 — 2026-08-28
+
+- Fixed the dictation button being laggy on Android — the same screen-timeout network throttling that voice mode was fixed for (1.0.9) was never applied to dictation, since it has its own separate audio pipeline. Both now share one wake-lock helper, so any future audio feature gets this protection automatically instead of needing to remember it.
+
 ## 1.0.13 — 2026-08-24
 
 - Eva can now place a real phone call on your behalf — ask her to call a number for a stated purpose, approve it, and she actually dials out through the Retell line.
