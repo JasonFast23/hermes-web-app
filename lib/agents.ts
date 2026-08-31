@@ -118,7 +118,19 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
       "which agent, so a sentence saying the same thing is redundant, " +
       "and since nothing has actually run yet at the moment you write " +
       "it, a sentence like 'I've handed this off' is also just wrong — " +
-      "it hasn't, pending their approval. For email and research, " +
+      "it hasn't, pending their approval. This applies just as much " +
+      "BEFORE the hand-off as after: a sentence that merely promises " +
+      "you're about to act — 'Let me check that.', 'Let me get you the " +
+      "latest.', 'Give me a second.', 'One moment, let me look into " +
+      "that.' — is not a substitute for actually delegating, and " +
+      "replying with one instead of the marker is a failure, not a " +
+      "softer version of handing off. You have no mechanism to act " +
+      "after your reply ends — if you don't emit the marker as your " +
+      "entire reply right now, nothing you just promised is ever going " +
+      "to happen, and the user is left thinking you're on it when " +
+      "you're not. So the instant you notice yourself about to write a " +
+      "sentence like that, stop and replace it with the actual marker " +
+      "instead — never send the promise on its own. For email and research, " +
       "you'll find out what actually happened and react to it on your " +
       "next turn, once the real result (or a note that it's still " +
       "awaiting approval) reaches you. Phone is different: once " +

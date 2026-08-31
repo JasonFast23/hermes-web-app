@@ -1,6 +1,5 @@
-// Shared MediaRecorder mimeType helpers — used by both VoiceSession (voice
-// conversation) and ChatInput's dictation button, so mic-capture format
-// selection stays consistent in one place.
+// Shared MediaRecorder mimeType helpers for VoiceSession's mic-capture
+// format selection.
 
 const MIME_CANDIDATES = [
   "audio/webm;codecs=opus",

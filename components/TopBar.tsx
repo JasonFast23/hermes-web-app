@@ -165,8 +165,8 @@ export function TopBar() {
 
   // Device labels are blank without an active/prior mic grant — request it
   // once when the panel opens (not on page load, so this doesn't surprise
-  // anyone who's never touched voice/dictation yet) so the dropdowns show
-  // real device names instead of "Microphone 1".
+  // anyone who's never touched voice yet) so the dropdowns show real device
+  // names instead of "Microphone 1".
   useEffect(() => {
     if (!open) return;
     let cancelled = false;

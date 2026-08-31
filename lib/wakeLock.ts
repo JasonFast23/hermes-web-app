@@ -1,5 +1,5 @@
-// Shared by every feature that streams audio over the network (voice mode,
-// dictation): Android suspends/throttles network activity for a
+// Shared by every feature that streams audio over the network (voice mode):
+// Android suspends/throttles network activity for a
 // backgrounded or screen-locked WebView, which turns an ordinarily
 // sub-second STT/TTS request into an 18+ second one the moment the screen
 // times out mid-session — see CHANGELOG 1.0.9, which first hit this in

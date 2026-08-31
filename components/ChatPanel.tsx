@@ -57,23 +57,18 @@ export function ChatPanel() {
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="absolute -bottom-32 -right-24 h-[520px] w-[520px] rounded-full bg-gradient-to-tr from-indigo-200/40 via-slate-200/30 to-transparent blur-3xl" />
         <div className="absolute -top-24 left-1/3 h-[360px] w-[360px] rounded-full bg-gradient-to-br from-sky-100/40 to-transparent blur-3xl" />
+        {voiceOpen && activeAgentId === "jarvis" && (
+          // Sits behind the thread (and everything else in this section,
+          // since it's the last of the pointer-events-none background
+          // layers) rather than taking over the screen — it's ambient
+          // indication that a voice session is live, not a dedicated view.
+          <div className="absolute inset-0 flex items-center justify-center">
+            <VoiceOrb />
+          </div>
+        )}
       </div>
 
-      {voiceOpen && activeAgentId === "jarvis" ? (
-        // Hide Eva's own thread specifically — reading her reply while also
-        // hearing it is what this avoids (see the voiceOpen comment in
-        // lib/store.ts). Scoped to her tab only, not voiceOpen in general:
-        // delegateToAgent switches activeAgentId to Research/Email while a
-        // hand-off is actually running (and no longer switches back once it
-        // reports), and that work was never being spoken anyway — the point
-        // is to stop reading along with your own ears, not to hide
-        // everything happening. Falling through to the normal thread view
-        // for any other tab means that work stays fully visible during a
-        // voice session.
-        <div className="relative flex flex-1 flex-col items-center justify-center px-6 text-center">
-          <VoiceOrb />
-        </div>
-      ) : messages.length === 0 ? (
+      {messages.length === 0 ? (
         <div className="relative flex flex-1 flex-col items-center justify-center px-6 text-center">
           <h1 className="font-[family-name:var(--font-display)] text-4xl leading-none tracking-tight text-zinc-400/70 sm:text-6xl md:text-7xl">
             AiPX Agent
