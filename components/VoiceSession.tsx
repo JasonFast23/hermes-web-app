@@ -6,7 +6,7 @@ import { pickRecorderMimeType, extForMimeType } from "@/lib/audio";
 import { getUserMediaWithFallback, applyAudioOutput } from "@/lib/audioDevices";
 import { voiceAudioLevelRef } from "@/lib/voiceAudioLevel";
 import { holdScreenAwake } from "@/lib/wakeLock";
-import { XIcon } from "./Icons";
+import { VoiceIcon, XIcon } from "./Icons";
 
 type Status =
   | "connecting"
@@ -642,10 +642,14 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
         onClick={handleCircleClick}
         disabled={circleDisabled}
         aria-label={statusLabel[status]}
-        className={`h-9 w-9 shrink-0 rounded-full bg-zinc-900 transition-transform duration-300 disabled:cursor-default ${
+        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-all duration-300 disabled:cursor-default ${
+          status === "recording" ? "bg-green-500 text-white ring-4 ring-green-200" : "bg-zinc-900 text-white"
+        } ${
           status === "speaking" ? "scale-110" : status === "transcribing" || status === "thinking" ? "scale-90 opacity-70" : "scale-100"
         } ${status === "recording" ? "animate-pulse" : ""}`}
-      />
+      >
+        <VoiceIcon className="h-[18px] w-[18px]" />
+      </button>
 
       <span className="flex-1 truncate text-[13.5px] font-medium text-zinc-600">
         {status === "error" ? errorMessage || statusLabel.error : statusLabel[status]}

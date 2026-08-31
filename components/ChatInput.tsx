@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, FormEvent } from "react";
 import { useChatStore } from "@/lib/store";
-import { ArrowUpIcon, StopIcon, WaveformIcon } from "./Icons";
+import { ArrowUpIcon, StopIcon, VoiceIcon } from "./Icons";
 import { VoiceSession } from "./VoiceSession";
 
 export function ChatInput() {
@@ -159,7 +159,7 @@ export function ChatInput() {
                 {hasText ? (
                   <ArrowUpIcon className="h-[18px] w-[18px]" />
                 ) : (
-                  <WaveformIcon className="h-[18px] w-[18px]" />
+                  <VoiceIcon className="h-[18px] w-[18px]" />
                 )}
               </button>
             )}
