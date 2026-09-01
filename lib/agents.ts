@@ -9,6 +9,12 @@ export interface AgentConfig {
   systemPrompt: string | null;
 }
 
+// The person this deployment belongs to — whoever "me"/"my email" refers to
+// when they ask the Email agent to send or forward something to themselves.
+// Every deployment of this app must set its own value; there is no default,
+// since guessing here is exactly the bug this constant exists to prevent.
+const OWNER_EMAIL = process.env.OWNER_EMAIL ?? "";
+
 export const AGENTS: Record<AgentId, AgentConfig> = {
   jarvis: {
     id: "jarvis",
@@ -225,6 +231,15 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     model: "hermes-agent",
     toolsets: ["skills", "terminal"],
     systemPrompt:
+      `The user's own email address — the one and only address that "send ` +
+      `it to me," "forward that to my email," "CC me," or any other ` +
+      `self-referential request resolves to — is exactly ${OWNER_EMAIL}. ` +
+      "Use it verbatim, every time, with no exceptions. Never substitute a " +
+      "different address for it, never guess one from earlier context, " +
+      "memory, or a prior conversation, and never ask the user to confirm " +
+      "their own address when this is the case — it is settled. This is " +
+      "the single most common failure mode for this agent, so treat it as " +
+      "a hard rule, not a default that other signals can override.\n\n" +
       "You are the Email agent. Your only job is email — searching, " +
       "reading, sending, replying to, and labeling/triaging messages in " +
       "the connected Gmail account. You never delegate or hand off to " +
