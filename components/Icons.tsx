@@ -161,17 +161,14 @@ export function MicIcon(props: IconProps) {
   );
 }
 
-export function VoiceIcon(props: IconProps) {
+export function WaveformIcon(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <path
-        fill="currentColor"
-        stroke="none"
-        d="M10 1C5.8 1.3 2.3 3.7 1 7.6 0.2 10 0.3 12.6 1.3 14.9 2.3 17.1 4.1 18.9 6.4 20 7.6 20.7 8.9 21.1 10.2 21.2 11.1 21.3 11.8 21 12.2 20.2 11.6 19 11.5 17.3 12.2 15.7 12.7 14.6 13.6 13.5 15 12.6 14 12.1 12.9 11.6 12.1 10.9 12.6 8.5 12.2 5.4 10.9 3.1 10.6 2.3 10.3 1.6 10 1Z"
-      />
-      <path d="M17.6 12Q19.5 14.5 17.6 17" />
-      <path d="M19.3 10Q22.1 14.5 19.3 19" />
-      <path d="M21 8Q24.6 14.5 21 21" />
+      <line x1="4" y1="10" x2="4" y2="14" />
+      <line x1="8" y1="7" x2="8" y2="17" />
+      <line x1="12" y1="4" x2="12" y2="20" />
+      <line x1="16" y1="7" x2="16" y2="17" />
+      <line x1="20" y1="10" x2="20" y2="14" />
     </svg>
   );
 }

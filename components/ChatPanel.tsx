@@ -5,7 +5,6 @@ import { useChatStore } from "@/lib/store";
 import { MessageBubble } from "./MessageBubble";
 import { ChatInput } from "./ChatInput";
 import { PendingDelegationCard } from "./PendingDelegationCard";
-import { VoiceOrb } from "./VoiceOrb";
 
 function greetingForHour(hour: number): string {
   if (hour < 5) return "Good Evening";
@@ -21,7 +20,6 @@ export function ChatPanel() {
   const error = useChatStore((s) => s.error);
   const scrollToMessage = useChatStore((s) => s.scrollToMessage);
   const isStreaming = useChatStore((s) => s.isStreaming);
-  const voiceOpen = useChatStore((s) => s.voiceOpen);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const messages = useMemo(
@@ -57,15 +55,6 @@ export function ChatPanel() {
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="absolute -bottom-32 -right-24 h-[520px] w-[520px] rounded-full bg-gradient-to-tr from-indigo-200/40 via-slate-200/30 to-transparent blur-3xl" />
         <div className="absolute -top-24 left-1/3 h-[360px] w-[360px] rounded-full bg-gradient-to-br from-sky-100/40 to-transparent blur-3xl" />
-        {voiceOpen && activeAgentId === "jarvis" && (
-          // Sits behind the thread (and everything else in this section,
-          // since it's the last of the pointer-events-none background
-          // layers) rather than taking over the screen — it's ambient
-          // indication that a voice session is live, not a dedicated view.
-          <div className="absolute inset-0 flex items-center justify-center">
-            <VoiceOrb />
-          </div>
-        )}
       </div>
 
       {messages.length === 0 ? (

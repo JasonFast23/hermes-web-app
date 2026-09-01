@@ -6,7 +6,7 @@ import { pickRecorderMimeType, extForMimeType } from "@/lib/audio";
 import { getUserMediaWithFallback, applyAudioOutput } from "@/lib/audioDevices";
 import { voiceAudioLevelRef } from "@/lib/voiceAudioLevel";
 import { holdScreenAwake } from "@/lib/wakeLock";
-import { VoiceIcon, XIcon } from "./Icons";
+import { XIcon } from "./Icons";
 
 type Status =
   | "connecting"
@@ -78,6 +78,10 @@ function createSentenceChunker(onSentence: (text: string) => void) {
 export function VoiceSession({ onClose }: { onClose: () => void }) {
   const [status, setStatus] = useState<Status>("connecting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const statusRef = useRef(status);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   const micStreamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -85,6 +89,7 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
   const discardRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
+  const circleRef = useRef<HTMLButtonElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const closedRef = useRef(false);
   const speechChainRef = useRef<Promise<void>>(Promise.resolve());
@@ -223,6 +228,26 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     const wakeLock = holdScreenAwake();
     return () => wakeLock.release();
+  }, []);
+
+  // Pulses the tap-to-speak circle itself with Eva's actual speech volume
+  // (voiceAudioLevelRef, written by the analyser loop below) instead of a
+  // separate ambient orb behind the thread — same signal, applied directly
+  // to the button via a ref so it doesn't fight React's render cycle.
+  useEffect(() => {
+    let raf: number;
+    let smoothed = 0;
+    const tick = () => {
+      const target = voiceAudioLevelRef.current;
+      smoothed += (target - smoothed) * 0.25;
+      if (circleRef.current) {
+        circleRef.current.style.transform =
+          statusRef.current === "speaking" ? `scale(${1 + smoothed * 0.35})` : "";
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
   }, []);
 
   const revokeObjectUrl = () => {
@@ -637,20 +662,6 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
     <div className="flex items-center gap-3 rounded-full border border-black/[0.07] bg-white px-3 py-2 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.05)]">
       <audio ref={audioElRef} />
 
-      <button
-        type="button"
-        onClick={handleCircleClick}
-        disabled={circleDisabled}
-        aria-label={statusLabel[status]}
-        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-all duration-300 disabled:cursor-default ${
-          status === "recording" ? "bg-green-500 text-white ring-4 ring-green-200" : "bg-zinc-900 text-white"
-        } ${
-          status === "speaking" ? "scale-110" : status === "transcribing" || status === "thinking" ? "scale-90 opacity-70" : "scale-100"
-        } ${status === "recording" ? "animate-pulse" : ""}`}
-      >
-        <VoiceIcon className="h-[18px] w-[18px]" />
-      </button>
-
       <span className="flex-1 truncate text-[13.5px] font-medium text-zinc-600">
         {status === "error" ? errorMessage || statusLabel.error : statusLabel[status]}
       </span>
@@ -673,6 +684,19 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
       >
         <XIcon className="h-4 w-4" />
       </button>
+
+      {/* Same slot the entry button occupies in ChatInput, so opening voice
+          mode doesn't visibly relocate the button the user just pressed. */}
+      <button
+        ref={circleRef}
+        type="button"
+        onClick={handleCircleClick}
+        disabled={circleDisabled}
+        aria-label={statusLabel[status]}
+        className={`h-10 w-10 shrink-0 rounded-full transition-[background-color,box-shadow] duration-300 disabled:cursor-default ${
+          status === "recording" ? "bg-green-500 ring-4 ring-green-200 animate-pulse" : "bg-zinc-900"
+        } ${status === "transcribing" || status === "thinking" ? "scale-90 opacity-70" : ""}`}
+      />
     </div>
   );
 }
