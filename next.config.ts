@@ -25,6 +25,12 @@ const nextConfig: NextConfig = {
   env: {
     HERMES_BUILD_ID: BUILD_ID,
   },
+  // pdfjs-dist (via pdf-parse, used by /api/files/extract) resolves its
+  // worker file with a dynamic import Next's bundler can't statically
+  // follow — bundling rewrites the path into somewhere the file doesn't
+  // exist. Excluding it from bundling makes Next require() it natively
+  // from node_modules at runtime instead, where the path is real.
+  serverExternalPackages: ["pdf-parse", "pdfjs-dist"],
 };
 
 export default nextConfig;

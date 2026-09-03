@@ -1,12 +1,12 @@
 {
   "name": "hermes-web-app",
-  "version": "1.0.15",
+  "version": "1.0.16",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
     "postbuild": "bash scripts/postbuild.sh",
-    "start": "next start",
+    "start": "next start --hostname 127.0.0.1",
     "lint": "eslint"
   },
   "dependencies": {
@@ -14,9 +14,11 @@
     "@capacitor/cli": "^8.5.0",
     "@capacitor/core": "^8.5.0",
     "next": "16.3.0",
+    "pdf-parse": "^2.4.5",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "retell-client-js-sdk": "^2.0.8",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-latest/xlsx-latest.tgz",
     "zustand": "^5.0.14"
   },
   "devDependencies": {

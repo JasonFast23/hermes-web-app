@@ -39,6 +39,32 @@ export interface ChatMessage {
   toolEvents?: ToolEvent[];
 }
 
+// A file the user uploaded to a session — see /api/files/extract. text is
+// the already-server-side-truncated extracted content (CSV per sheet for a
+// spreadsheet, plain text for a PDF); truncated flags when MAX_EXTRACT_CHARS
+// cut it short, so buildFileContext can say so rather than silently handing
+// the model a partial document.
+export interface AttachedFile {
+  id: string;
+  filename: string;
+  kind: "pdf" | "spreadsheet";
+  text: string;
+  truncated: boolean;
+  uploadedAt: number;
+}
+
+// A note Priscilla posts from the Feedback tab (a bug, a rough edge, a
+// request) so it shows up for Jason next time he opens the app — the
+// alternative being her emailing him each one separately, which is what
+// this replaces. Synced like sessions (see lib/syncClientStorage.ts) so it
+// appears on whichever device he's on, not just the one she posted from.
+export interface FeedbackItem {
+  id: string;
+  text: string;
+  createdAt: number;
+  resolved: boolean;
+}
+
 export interface ToolProgressPayload {
   tool: string;
   emoji?: string;
@@ -118,6 +144,18 @@ export interface PendingDelegation {
   researchMode?: "fast" | "deep";
 }
 
+// A message typed while its target agent was still streaming (or working
+// through a delegation), held here instead of being dropped — see
+// queueMessage. sessionId/agentId pin it to the tab it was written for so
+// it can only ever be sent into that same conversation, never wherever the
+// user happens to be navigated to once it's this message's turn.
+export interface QueuedMessage {
+  id: string;
+  sessionId: string;
+  agentId: AgentId;
+  text: string;
+}
+
 // A real outbound phone call Eva proposed — [[DELEGATE:phone]], parsed
 // out of PendingDelegation's flow separately since it isn't really a
 // hand-off to another text-generating agent (no AgentId, no /api/chat
@@ -139,8 +177,24 @@ export interface ChatSession {
   id: string;
   title: string;
   createdAt: number;
+  // Bumped whenever the session gets new activity (a message sent or
+  // received) — the list sorts by this, not createdAt, so messaging an old
+  // session floats it back to the top like any normal chat app. Merely
+  // opening/viewing a session does NOT bump this — see switchSession —
+  // since reordering the list on every click was disorienting. Optional so
+  // sessions persisted before this field existed still load fine; use
+  // sessionRecency() below rather than reading this field directly.
+  lastActiveAt?: number;
   threads: Partial<Record<AgentId, ChatMessage[]>>;
   agentActivity: AgentActivityEntry[];
+  // Files uploaded into this session (Eva's tab only, for now — see
+  // attachFile). Optional so sessions persisted before this field existed
+  // still load fine.
+  attachedFiles?: AttachedFile[];
+}
+
+export function sessionRecency(session: ChatSession): number {
+  return session.lastActiveAt ?? session.createdAt;
 }
 
 interface ChatState {
@@ -155,6 +209,24 @@ interface ChatState {
   // A delegation awaiting Approve/Decline. Never persisted — holds a live
   // callback and only makes sense for the page session that detected it.
   pendingDelegation: PendingDelegation | null;
+  // Set for the duration of an approved delegation's actual run (from
+  // approveDelegation through the target agent's reply) — unlike
+  // pendingDelegation, this doesn't gate an approval, it's just "who's
+  // working right now" so the UI can say so without forcing the user's
+  // view onto that agent's tab (delegateToAgent used to do that; it read
+  // as the app hijacking navigation, and cost one user an accidental stop
+  // when they thought they were still on Eva's tab). Never persisted —
+  // only meaningful for a live run.
+  activeDelegation: { sessionId: string; targetAgentId: AgentId; task: string } | null;
+  // Messages submitted while isStreaming was already true for that
+  // session/agent — sent automatically once that run finishes (see
+  // drainMessageQueue) instead of being blocked with no way to submit
+  // them. Never persisted — a reload losing an unsent queued message is
+  // an acceptable edge case for state that's only ever seconds old.
+  messageQueue: QueuedMessage[];
+  // Filenames currently being uploaded to /api/files/extract — lets the
+  // input show a "reading…" chip per in-flight upload. Never persisted.
+  pendingUploads: string[];
   // Same idea, for a proposed real phone call — see PendingPhoneCall.
   // Mutually exclusive with pendingDelegation in practice (a reply is
   // either one marker or the other), but kept as a separate field rather
@@ -174,7 +246,11 @@ interface ChatState {
   // sidebarCollapsed (which only makes sense for the desktop rail). Never
   // persisted — a phone reload should always land closed.
   mobileSidebarOpen: boolean;
-  view: "chat" | "sessions" | "phone";
+  view: "chat" | "sessions" | "phone" | "feedback";
+  // Posted from the Feedback tab. Synced across devices (see
+  // lib/syncClientStorage.ts) so Jason sees what Priscilla posts, and vice
+  // versa, without either having to be looking at the same device.
+  feedbackItems: FeedbackItem[];
   // Set when a notification toast for a specific call is clicked (see
   // NotificationListener) — PhoneView reads and clears this on mount/
   // update to jump straight to that call's detail instead of the list.
@@ -226,7 +302,9 @@ interface ChatState {
   audioOutputDeviceId: string | null;
 
   setActiveAgent: (id: AgentId) => void;
-  setView: (view: "chat" | "sessions" | "phone") => void;
+  setView: (view: "chat" | "sessions" | "phone" | "feedback") => void;
+  postFeedback: (text: string) => void;
+  toggleFeedbackResolved: (id: string) => void;
   setResearchFastMode: (fast: boolean) => void;
   setVoiceOpen: (open: boolean) => void;
   startNewSession: () => void;
@@ -236,13 +314,26 @@ interface ChatState {
   deleteSession: (sessionId: string) => void;
   deleteSessions: (sessionIds: string[]) => void;
   sendMessage: (text: string) => Promise<void>;
+  // Called instead of sendMessage when isStreaming is already true for the
+  // current session/agent — parks the text in messageQueue rather than
+  // dropping it. Silently no-ops on an empty session id the way sendMessage
+  // itself never has to worry about (it always runs after ensureActiveSession).
+  queueMessage: (text: string) => void;
+  removeQueuedMessage: (id: string) => void;
+  // Uploads a file to /api/files/extract and, on success, adds it to the
+  // active session's attachedFiles (creating the session first if needed,
+  // same as sendMessage). Failure is surfaced through the existing `error`
+  // field rather than a thrown rejection, matching sendMessage's pattern.
+  attachFile: (file: File) => Promise<void>;
+  removeAttachedFile: (fileId: string) => void;
   delegateToAgent: (
     sessionId: string,
     fromAgentId: AgentId,
     targetAgentId: AgentId,
     task: string,
     onToolEvent?: (event: ToolProgressPayload) => void,
-    researchMode?: "fast" | "deep"
+    researchMode?: "fast" | "deep",
+    hopsLeft?: number
   ) => Promise<string>;
   askEva: (
     message: string,
@@ -347,10 +438,12 @@ function newId(): string {
 }
 
 function createSession(): ChatSession {
+  const now = Date.now();
   return {
     id: newId(),
     title: "New session",
-    createdAt: Date.now(),
+    createdAt: now,
+    lastActiveAt: now,
     threads: {},
     agentActivity: [],
   };
@@ -380,7 +473,17 @@ const AGENT_ACTIVITY_EXCERPT_CHARS = 500;
 // and, unabridged, in that agent's own tab — Eva is told (see her system
 // prompt) to point there for more instead of this block trying to carry
 // the whole thing forward forever.
-function buildAgentActivityContext(session: ChatSession | undefined): string | undefined {
+function buildAgentActivityContext(
+  session: ChatSession | undefined,
+  // Set on the one turn immediately following a delegation report (see
+  // runEvaAfterDelegation) so THAT agent's entry is handed over in full
+  // instead of the usual excerpt — a mid-table truncation right when Eva
+  // is asked to relay specific numbers reads to the model as an
+  // incomplete quote, and she'll hedge ("I don't want to make up the
+  // amounts") rather than risk it. Fine to do here because it's a single
+  // turn, not resent indefinitely — every later turn still excerpts it.
+  fullForAgentId?: AgentId
+): string | undefined {
   const entries = session?.agentActivity ?? [];
   if (entries.length === 0) return undefined;
 
@@ -389,7 +492,7 @@ function buildAgentActivityContext(session: ChatSession | undefined): string | u
 
   const lines = Array.from(latestByAgent.values()).map((e) => {
     const name = AGENTS[e.agentId].name;
-    const isTruncated = e.summary.length > AGENT_ACTIVITY_EXCERPT_CHARS;
+    const isTruncated = e.agentId !== fullForAgentId && e.summary.length > AGENT_ACTIVITY_EXCERPT_CHARS;
     // Keep the TAIL, not the head — Research's reply can now open with a
     // run of brief "found X, checking Y next" notes (see
     // RESEARCH_DEEP_MODE_CONTEXT) before its actual structured answer at
@@ -409,6 +512,32 @@ function buildAgentActivityContext(session: ChatSession | undefined): string | u
   );
 }
 
+// Resent in full on every turn (unlike buildAgentActivityContext's
+// per-turn excerpt) — a file the user deliberately attached is usually
+// exactly what the conversation is about, not incidental background, so
+// truncating it after the first turn would break the common case of a
+// follow-up question about a different figure in the same document.
+// /api/files/extract already caps each file's own text server-side, so
+// this is still bounded per file, just not re-truncated on top of that.
+function buildFileContext(session: ChatSession | undefined): string | undefined {
+  const files = session?.attachedFiles ?? [];
+  if (files.length === 0) return undefined;
+
+  const blocks = files.map(
+    (f) =>
+      `File: ${f.filename}${f.truncated ? " (truncated — this is only part of the file)" : ""}\n${f.text}`
+  );
+
+  return (
+    "The user has attached the following file(s) to this conversation. " +
+    "Answer from their actual contents — quote or reference specific " +
+    "figures directly rather than describing the file in vague terms, " +
+    "and don't claim something is or isn't in the file without checking " +
+    "the text below:\n\n" +
+    blocks.join("\n\n---\n\n")
+  );
+}
+
 // pendingDelegation now persists across the user's follow-up messages
 // (see sendMessage) instead of silently clearing, so without this Eva has
 // no way to know a delegation she proposed is still just sitting there
@@ -417,8 +546,13 @@ function buildAgentActivityContext(session: ChatSession | undefined): string | u
 // it never actually ran.
 function buildPendingDelegationContext(pending: PendingDelegation | null, sessionId: string): string | undefined {
   if (!pending || pending.sessionId !== sessionId) return undefined;
+  // Research and Email can now propose delegating directly to each other
+  // (still gated by the same Approve/Decline card), so the proposer isn't
+  // always Eva herself — say who it actually was rather than always "you."
+  const proposer =
+    pending.fromAgentId === "jarvis" ? "You" : `The ${AGENTS[pending.fromAgentId].name}`;
   return (
-    `You proposed delegating to the ${AGENTS[pending.targetAgentId].name} a moment ago ` +
+    `${proposer} proposed delegating to the ${AGENTS[pending.targetAgentId].name} a moment ago ` +
     `("${pending.task}") but the user has not approved or declined it yet — it has NOT ` +
     `run, and nothing has come back from it. Do not say it's done, in progress, or that ` +
     `you're waiting on the agent to report — none of that is true yet. If it's relevant ` +
@@ -696,6 +830,7 @@ export const useChatStore = create<ChatState>()(
                     sess.title === "New session" && titleSeed
                       ? deriveTitle(titleSeed)
                       : sess.title,
+                  lastActiveAt: Date.now(),
                   threads: {
                     ...sess.threads,
                     [agentId]: [...(sess.threads[agentId] ?? []), ...msgs],
@@ -835,6 +970,15 @@ export const useChatStore = create<ChatState>()(
             ),
           }));
 
+        // Only Eva places real phone calls — Research and Email can now
+        // propose delegating to EACH OTHER (see their system prompts), but
+        // a live call to a real person is a different order of consequence
+        // and was never something either of them was told to reach for.
+        // Prompts are the only thing that normally keeps them off targets
+        // they weren't told to use; phone gets an actual code-level guard
+        // on top of that, rather than trusting the prompt alone.
+        if (match[1] === "phone" && agentId !== "jarvis") return fullText.trim();
+
         if (match[1] === "phone") {
           const phoneMatch = PHONE_TASK_PATTERN.exec(rawTask);
           if (!phoneMatch) return fullText.trim(); // malformed — degrade to showing the raw text rather than parking a broken card
@@ -884,7 +1028,8 @@ export const useChatStore = create<ChatState>()(
         sessionId: string,
         onToolEvent: ((event: ToolProgressPayload) => void) | undefined,
         hopsLeft: number,
-        onDelta?: (chunk: string) => void
+        onDelta?: (chunk: string) => void,
+        justReportedAgentId?: AgentId
       ): Promise<string> => {
         const session = get().sessions.find((s) => s.id === sessionId);
 
@@ -908,21 +1053,28 @@ export const useChatStore = create<ChatState>()(
 
         // Eva's actual prior turns live server-side now (X-Hermes-Session-Id
         // continuity) — this is just the new nudge turn, not a history replay.
+        // Deliberately doesn't say "the agent YOU delegated to" — Research and
+        // Email can now hand off directly to each other (still gated by an
+        // Approve/Decline card, same as every delegation), so the report
+        // Eva's reacting to might not be one she personally set in motion.
         const nudge: HistoryMessage = {
           role: "user",
           content:
-            "The agent you delegated to has reported back — see the " +
-            "findings noted above for your awareness. In almost every " +
-            "case that report already answers what the user asked, so " +
-            "just relay/summarize it to them now and stop — do not " +
-            "delegate again on your own initiative. In particular, if " +
-            "the report offers to do more for the USER (e.g. 'if you " +
-            "have a different spelling, I can search again'), that " +
-            "offer is for the user to accept or decline, not something " +
-            "you act on yourself by guessing what they'd say. Only " +
-            "delegate again if the user's ORIGINAL request explicitly " +
-            "required a further step that genuinely hasn't happened " +
-            "yet.",
+            "An agent has reported back — see the findings noted above " +
+            "for your awareness. In almost every case that report " +
+            "already answers what the user asked, so just relay/" +
+            "summarize it to them now and stop — do not delegate again " +
+            "on your own initiative. In particular, if the report " +
+            "offers to do more for the USER (e.g. 'if you have a " +
+            "different spelling, I can search again'), that offer is " +
+            "for the user to accept or decline, not something you act " +
+            "on yourself by guessing what they'd say. Only delegate " +
+            "again if the user's ORIGINAL request explicitly required a " +
+            "further step that genuinely hasn't happened yet. If " +
+            "there's a pending delegation noted below still awaiting the " +
+            "user's approval — proposed by you or by another agent — " +
+            "don't claim it's done or promise it yourself; it's already " +
+            "shown to the user as a card they can approve or decline.",
         };
 
         const controller = new AbortController();
@@ -937,7 +1089,11 @@ export const useChatStore = create<ChatState>()(
             appendToAssistant,
             handleToolEvent,
             controller.signal,
-            buildAgentActivityContext(session)
+            combineContext(
+              buildAgentActivityContext(session, justReportedAgentId),
+              buildPendingDelegationContext(get().pendingDelegation, sessionId),
+              buildFileContext(session)
+            )
           );
         } catch (err) {
           if (isAbortError(err)) {
@@ -954,6 +1110,27 @@ export const useChatStore = create<ChatState>()(
         return processDelegateMarker(sessionId, "jarvis", assistantMessage.id, fullText, onToolEvent, hopsLeft - 1);
       };
 
+      // Called from the finally block of every action that flips
+      // isStreaming back to false (sendMessage, approveDelegation,
+      // approvePhoneCall) so a message queued mid-run gets sent the moment
+      // it's free, with no separate polling or timer needed. Only pulls a
+      // queued message that belongs to whatever session/agent is CURRENTLY
+      // active — if the user has since navigated elsewhere, it's left
+      // queued rather than firing into a tab the user isn't looking at;
+      // it'll send next time that tab is active and idle (including
+      // immediately, if the user is still there when this runs).
+      const drainMessageQueue = () => {
+        const state = get();
+        if (state.isStreaming) return;
+        const idx = state.messageQueue.findIndex(
+          (q) => q.sessionId === state.activeSessionId && q.agentId === state.activeAgentId
+        );
+        if (idx === -1) return;
+        const next = state.messageQueue[idx];
+        set({ messageQueue: state.messageQueue.filter((_, i) => i !== idx) });
+        void get().sendMessage(next.text);
+      };
+
       return {
         activeAgentId: DEFAULT_AGENT_ID,
         activeSessionId: null,
@@ -961,6 +1138,9 @@ export const useChatStore = create<ChatState>()(
         isStreaming: false,
         activeAbortController: null,
         pendingDelegation: null,
+        activeDelegation: null,
+        messageQueue: [],
+        pendingUploads: [],
         pendingPhoneCall: null,
         scrollToMessage: null,
         error: null,
@@ -973,14 +1153,39 @@ export const useChatStore = create<ChatState>()(
         phoneCallsLoading: false,
         phoneCallsError: null,
         seenFollowUpCallIds: [],
+        feedbackItems: [],
         voiceVolume: 1,
         researchFastMode: true,
         voiceOpen: false,
         audioInputDeviceId: null,
         audioOutputDeviceId: null,
 
-        setActiveAgent: (id) => set({ activeAgentId: id, view: "chat" }),
+        setActiveAgent: (id) => {
+          set({ activeAgentId: id, view: "chat" });
+          // Catches a message that was queued for this tab while it wasn't
+          // the active one and finished streaming in the background —
+          // drainMessageQueue only fires automatically from the tab that
+          // was active AT the moment streaming ended, so switching here
+          // needs its own check too.
+          drainMessageQueue();
+        },
         setView: (view) => set({ view }),
+        postFeedback: (text) => {
+          const trimmed = text.trim();
+          if (!trimmed) return;
+          set((s) => ({
+            feedbackItems: [
+              { id: newId(), text: trimmed, createdAt: Date.now(), resolved: false },
+              ...s.feedbackItems,
+            ],
+          }));
+        },
+        toggleFeedbackResolved: (id) =>
+          set((s) => ({
+            feedbackItems: s.feedbackItems.map((f) =>
+              f.id === id ? { ...f, resolved: !f.resolved } : f
+            ),
+          })),
         setVoiceVolume: (volume) => set({ voiceVolume: Math.min(1, Math.max(0, volume)) }),
         setResearchFastMode: (fast) => set({ researchFastMode: fast }),
         setVoiceOpen: (open) => set({ voiceOpen: open }),
@@ -1015,6 +1220,11 @@ export const useChatStore = create<ChatState>()(
           // the session that raised it — don't let it linger and fire out
           // of context after switching. Same for researchFastMode: see
           // startNewSession's comment just above.
+          // Just opening a session does NOT bump lastActiveAt — only actual
+          // new activity in it does (see appendMessages). Reordering the
+          // list on open as well made it reshuffle under the user's cursor
+          // on every click, which is disorienting when clicking through
+          // several sessions in a row.
           set({
             activeSessionId: sessionId,
             view: "chat",
@@ -1023,6 +1233,9 @@ export const useChatStore = create<ChatState>()(
             scrollToMessage: null,
             researchFastMode: true,
           });
+          // See setActiveAgent's comment — catches a message queued for
+          // this session while it wasn't the active one.
+          drainMessageQueue();
         },
 
         // Used by the Chats search results: jump straight to the session,
@@ -1030,6 +1243,8 @@ export const useChatStore = create<ChatState>()(
         // just opening the session and leaving the user to hunt for it.
         openSearchResult: (sessionId, agentId, messageId, query) => {
           if (!get().sessions.some((s) => s.id === sessionId)) return;
+          // See switchSession's comment — opening a session on its own
+          // doesn't reorder the list.
           set({
             activeSessionId: sessionId,
             activeAgentId: agentId,
@@ -1053,7 +1268,7 @@ export const useChatStore = create<ChatState>()(
             const sessions = s.sessions.filter((sess) => !idSet.has(sess.id));
             if (!s.activeSessionId || !idSet.has(s.activeSessionId)) return { sessions };
 
-            const next = [...sessions].sort((a, b) => b.createdAt - a.createdAt)[0];
+            const next = [...sessions].sort((a, b) => sessionRecency(b) - sessionRecency(a))[0];
             return { sessions, activeSessionId: next ? next.id : null };
           });
         },
@@ -1129,7 +1344,15 @@ export const useChatStore = create<ChatState>()(
         approveDelegation: async (onDelta) => {
           const pending = get().pendingDelegation;
           if (!pending) return;
-          set({ pendingDelegation: null, isStreaming: true });
+          set({
+            pendingDelegation: null,
+            isStreaming: true,
+            activeDelegation: {
+              sessionId: pending.sessionId,
+              targetAgentId: pending.targetAgentId,
+              task: pending.task,
+            },
+          });
           try {
             await get().delegateToAgent(
               pending.sessionId,
@@ -1137,11 +1360,19 @@ export const useChatStore = create<ChatState>()(
               pending.targetAgentId,
               pending.task,
               pending.onToolEvent,
-              pending.researchMode
+              pending.researchMode,
+              pending.hopsLeft
             );
-            await runEvaAfterDelegation(pending.sessionId, pending.onToolEvent, pending.hopsLeft, onDelta);
+            await runEvaAfterDelegation(
+              pending.sessionId,
+              pending.onToolEvent,
+              pending.hopsLeft,
+              onDelta,
+              pending.targetAgentId
+            );
           } finally {
-            set({ isStreaming: false });
+            set({ isStreaming: false, activeDelegation: null });
+            drainMessageQueue();
           }
         },
 
@@ -1184,6 +1415,7 @@ export const useChatStore = create<ChatState>()(
             text = `⚠️ Couldn't place that call — ${detail}`;
           } finally {
             set({ isStreaming: false });
+            drainMessageQueue();
           }
 
           appendMessages(pending.sessionId, pending.fromAgentId, [
@@ -1248,7 +1480,8 @@ export const useChatStore = create<ChatState>()(
               agentId === "jarvis"
                 ? combineContext(
                     buildAgentActivityContext(get().sessions.find((s) => s.id === sessionId)),
-                    buildPendingDelegationContext(get().pendingDelegation, sessionId)
+                    buildPendingDelegationContext(get().pendingDelegation, sessionId),
+                    buildFileContext(get().sessions.find((s) => s.id === sessionId))
                   )
                 : agentId === "graphic"
                   ? researchFast
@@ -1263,18 +1496,29 @@ export const useChatStore = create<ChatState>()(
               researchFast ? ["web", "skills"] : undefined
             );
 
+            // Awaited (not fire-and-forget) so isStreaming — and the Stop
+            // button it gates — stays true for the whole delegation chain,
+            // including Eva's follow-up reaction to the report, not just
+            // her initial short hand-off turn. Strips any [[DELEGATE:x]]
+            // marker (now something Research/Email can emit too, not just
+            // Eva) before logging, so a subagent proposing a further
+            // hand-off never leaks raw marker syntax into what Eva reads
+            // from the activity feed below.
+            const strippedText = await processDelegateMarker(
+              sessionId,
+              agentId,
+              assistantMessage.id,
+              fullText,
+              onToolEvent,
+              MAX_DELEGATION_HOPS
+            );
+
             // A direct conversation with a subagent's own tab (as opposed
             // to Eva delegating to it) never otherwise reaches Eva — log it
             // here so she picks it up on her next turn. (No-op when
             // agentId is jarvis; delegateToAgent logs delegated results
             // itself, via this same activity feed.)
-            recordAgentActivity(sessionId, agentId, fullText);
-
-            // Awaited (not fire-and-forget) so isStreaming — and the Stop
-            // button it gates — stays true for the whole delegation chain,
-            // including Eva's follow-up reaction to the report, not just
-            // her initial short hand-off turn.
-            await processDelegateMarker(sessionId, agentId, assistantMessage.id, fullText, onToolEvent, MAX_DELEGATION_HOPS);
+            recordAgentActivity(sessionId, agentId, strippedText);
           } catch (err) {
             if (!isAbortError(err)) {
               set({ error: err instanceof Error ? err.message : "Request failed" });
@@ -1283,10 +1527,83 @@ export const useChatStore = create<ChatState>()(
             }
           } finally {
             set({ isStreaming: false, activeAbortController: null });
+            drainMessageQueue();
           }
         },
 
-        delegateToAgent: async (sessionId, fromAgentId, targetAgentId, task, onToolEvent, researchMode) => {
+        queueMessage: (text) => {
+          const trimmed = text.trim();
+          const sessionId = get().activeSessionId;
+          if (!trimmed || !sessionId) return;
+          set((s) => ({
+            messageQueue: [
+              ...s.messageQueue,
+              { id: newId(), sessionId, agentId: s.activeAgentId, text: trimmed },
+            ],
+          }));
+        },
+
+        removeQueuedMessage: (id) =>
+          set((s) => ({ messageQueue: s.messageQueue.filter((q) => q.id !== id) })),
+
+        attachFile: async (file) => {
+          await whenSyncReady();
+          const session = ensureActiveSession();
+          const sessionId = session.id;
+
+          set((s) => ({ pendingUploads: [...s.pendingUploads, file.name] }));
+          try {
+            const formData = new FormData();
+            formData.append("file", file);
+            const res = await fetch("/api/files/extract", { method: "POST", body: formData });
+            const data = await res.json().catch(() => null);
+            if (!res.ok || !data) {
+              throw new Error(data?.error || "Failed to read that file");
+            }
+
+            const attached: AttachedFile = {
+              id: newId(),
+              filename: data.filename,
+              kind: data.kind,
+              text: data.text,
+              truncated: Boolean(data.truncated),
+              uploadedAt: Date.now(),
+            };
+            set((s) => ({
+              sessions: s.sessions.map((sess) =>
+                sess.id === sessionId
+                  ? { ...sess, attachedFiles: [...(sess.attachedFiles ?? []), attached] }
+                  : sess
+              ),
+            }));
+          } catch (err) {
+            set({ error: err instanceof Error ? err.message : "Failed to upload file" });
+          } finally {
+            set((s) => ({ pendingUploads: s.pendingUploads.filter((n) => n !== file.name) }));
+          }
+        },
+
+        removeAttachedFile: (fileId) => {
+          const sessionId = get().activeSessionId;
+          if (!sessionId) return;
+          set((s) => ({
+            sessions: s.sessions.map((sess) =>
+              sess.id === sessionId
+                ? { ...sess, attachedFiles: (sess.attachedFiles ?? []).filter((f) => f.id !== fileId) }
+                : sess
+            ),
+          }));
+        },
+
+        delegateToAgent: async (
+          sessionId,
+          fromAgentId,
+          targetAgentId,
+          task,
+          onToolEvent,
+          researchMode,
+          hopsLeft = MAX_DELEGATION_HOPS
+        ) => {
           const trimmed = task.trim();
           if (!trimmed) return "";
 
@@ -1295,14 +1612,16 @@ export const useChatStore = create<ChatState>()(
 
           appendMessages(sessionId, targetAgentId, [userMessage, assistantMessage], trimmed);
 
-          // Follow the hand-off live: show whichever agent is actually
-          // doing the work. Deliberately does NOT switch back to the
-          // delegating agent once it reports — auto-yanking the tab away
-          // mid-read (or right as the user starts reading the subagent's
-          // answer) felt rough, so the user stays on Research/Email until
-          // they switch tabs themselves.
-          set({ activeAgentId: targetAgentId, view: "chat" });
-
+          // Deliberately does NOT move the user's view onto the target
+          // agent's tab — the user is dealing with Eva, not the
+          // specialists, and force-navigating away from her tab mid-task
+          // reads as the app hijacking navigation (it also cost one user
+          // an accidental Stop, hit while trying to give Eva another
+          // message and not realizing the tab had changed underneath
+          // them). activeDelegation (set by approveDelegation) is what
+          // tells the UI who's working now, so it can say so in place
+          // instead; the sidebar and PendingDelegationCard read it to show
+          // a "View" link for anyone who wants to actually watch.
           const appendToAssistant = (chunk: string) =>
             appendToMessage(sessionId, targetAgentId, assistantMessage.id, chunk);
           // Deliberately doesn't forward to the caller's onToolEvent — a
@@ -1338,16 +1657,27 @@ export const useChatStore = create<ChatState>()(
               isFastResearch ? ["web", "skills"] : undefined
             );
 
-            // Subagents are pure specialists — they never delegate further
-            // (only Eva/jarvis does), so unlike the top-level case there's
-            // no DELEGATE_MARKER check here. Their result is always the
-            // final answer. Eva no longer gets this repeated back to her as
-            // a visible "X Agent finished: ..." message in her own thread —
-            // she picks it up from the activity log (recordAgentActivity)
-            // the same way she picks up direct tab conversations.
+            // Research and Email may now each propose handing off to the
+            // OTHER one (never to Eva, never to phone — see their system
+            // prompts) when their own task explicitly called for it, using
+            // the same [[DELEGATE:x]] marker Eva uses. Runs through the
+            // same processDelegateMarker as every other marker check, so it
+            // parks a pendingDelegation for the user to approve/decline
+            // rather than chaining automatically — that's what makes this
+            // safe to allow again after it was previously pulled for
+            // running unchecked. Strip before logging so the activity feed
+            // Eva reads never contains raw marker syntax.
             const answer = result.trim() || "(no response)";
-            recordAgentActivity(sessionId, targetAgentId, answer);
-            return answer;
+            const strippedAnswer = await processDelegateMarker(
+              sessionId,
+              targetAgentId,
+              assistantMessage.id,
+              answer,
+              handleToolEvent,
+              hopsLeft - 1
+            );
+            recordAgentActivity(sessionId, targetAgentId, strippedAnswer);
+            return strippedAnswer;
           } catch (err) {
             if (isAbortError(err)) {
               appendToAssistant("\n\n_Stopped._");
@@ -1417,7 +1747,8 @@ export const useChatStore = create<ChatState>()(
               combineContext(
                 VOICE_MODE_CONTEXT,
                 buildAgentActivityContext(session),
-                buildPendingDelegationContext(get().pendingDelegation, sessionId)
+                buildPendingDelegationContext(get().pendingDelegation, sessionId),
+                buildFileContext(session)
               )
             );
           } catch (err) {
@@ -1460,6 +1791,7 @@ export const useChatStore = create<ChatState>()(
         phoneCalls: state.phoneCalls,
         phoneCallsFetchedAt: state.phoneCallsFetchedAt,
         seenFollowUpCallIds: state.seenFollowUpCallIds,
+        feedbackItems: state.feedbackItems,
       }),
       // A browser that persisted activeAgentId before Case File was
       // disabled (e.g. "rag") would otherwise silently keep driving the

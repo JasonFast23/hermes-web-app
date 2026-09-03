@@ -19,7 +19,8 @@ function isSyncedState(value: unknown): value is SyncedState {
   return (
     Array.isArray(v.sessions) &&
     Array.isArray(v.seenFollowUpCallIds) &&
-    (v.phoneCallsFetchedAt === null || typeof v.phoneCallsFetchedAt === "number")
+    (v.phoneCallsFetchedAt === null || typeof v.phoneCallsFetchedAt === "number") &&
+    Array.isArray(v.feedbackItems)
   );
 }
 
@@ -38,7 +39,7 @@ export async function PUT(req: NextRequest) {
     !isSyncedState((body as { state?: unknown }).state)
   ) {
     return Response.json(
-      { error: "Expected { baseVersion: number, state: { sessions, seenFollowUpCallIds, phoneCalls, phoneCallsFetchedAt } }" },
+      { error: "Expected { baseVersion: number, state: { sessions, seenFollowUpCallIds, phoneCalls, phoneCallsFetchedAt, feedbackItems } }" },
       { status: 400 }
     );
   }

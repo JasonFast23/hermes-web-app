@@ -2,12 +2,12 @@
 // lib/sync-broadcast.ts, app/api/sync/*). Wraps localStorage as a zustand
 // `StateStorage` — getItem/setItem/removeItem stay a trivial passthrough
 // so today's synchronous, no-flash hydration from localStorage is
-// unchanged — while independently keeping a shared, 4-field subset of the
+// unchanged — while independently keeping a shared, 5-field subset of the
 // persisted state (sessions, seenFollowUpCallIds, phoneCalls,
-// phoneCallsFetchedAt) in sync with the server. Everything else persisted
-// (activeSessionId, activeAgentId, sidebarCollapsed, voiceVolume, audio
-// device ids) is per-device UI/hardware state, not shared history, and
-// never leaves this browser.
+// phoneCallsFetchedAt, feedbackItems) in sync with the server. Everything
+// else persisted (activeSessionId, activeAgentId, sidebarCollapsed,
+// voiceVolume, audio device ids) is per-device UI/hardware state, not
+// shared history, and never leaves this browser.
 //
 // Doesn't import useChatStore directly (lib/store.ts imports THIS module
 // for its `storage` option, so importing back would be circular) —
@@ -15,7 +15,7 @@
 // right after creating the store to apply remote updates via setState.
 import type { StateStorage } from "zustand/middleware";
 import type { AgentId } from "./agents";
-import type { ChatSession, ChatMessage, CallSummary } from "./store";
+import type { ChatSession, ChatMessage, CallSummary, FeedbackItem } from "./store";
 import { getDeletedIds } from "./sync-tombstones";
 import { BUILD_ID } from "./build-id";
 
@@ -29,6 +29,7 @@ export interface SyncedFields {
   seenFollowUpCallIds: string[];
   phoneCalls: CallSummary[] | null;
   phoneCallsFetchedAt: number | null;
+  feedbackItems: FeedbackItem[];
 }
 
 interface PersistEnvelope {
@@ -99,6 +100,7 @@ function extractSyncedFields(state: Record<string, unknown>): SyncedFields {
     seenFollowUpCallIds: Array.isArray(state.seenFollowUpCallIds) ? (state.seenFollowUpCallIds as string[]) : [],
     phoneCalls: (state.phoneCalls as CallSummary[] | null) ?? null,
     phoneCallsFetchedAt: (state.phoneCallsFetchedAt as number | null) ?? null,
+    feedbackItems: Array.isArray(state.feedbackItems) ? (state.feedbackItems as FeedbackItem[]) : [],
   };
 }
 
@@ -197,6 +199,31 @@ function mergeSessionLists(local: ChatSession[], remote: ChatSession[], excludeI
   return order.map((id) => byId.get(id)!).sort((x, y) => y.createdAt - x.createdAt);
 }
 
+// Union by id, same shape as mergeSessionLists — new posts from either side
+// always survive. No delete action exists for feedback items (unlike
+// sessions, which need excludeIds/tombstones to keep a deletion from being
+// resurrected by this same union), so the only per-item conflict possible
+// is the resolved flag — "sticky true" so a resolve made on one device is
+// never lost to a merge racing against a stale unresolved copy from another.
+function mergeFeedbackItems(local: FeedbackItem[], remote: FeedbackItem[]): FeedbackItem[] {
+  const byId = new Map<string, FeedbackItem>();
+  const order: string[] = [];
+  const addAll = (list: FeedbackItem[]) => {
+    for (const item of list) {
+      const existing = byId.get(item.id);
+      if (!existing) {
+        order.push(item.id);
+        byId.set(item.id, item);
+      } else {
+        byId.set(item.id, { ...existing, resolved: existing.resolved || item.resolved });
+      }
+    }
+  };
+  addAll(local);
+  addAll(remote);
+  return order.map((id) => byId.get(id)!).sort((a, b) => b.createdAt - a.createdAt);
+}
+
 // excludeIds is only ever passed on the 409-retry merge path (see
 // pushToServer) — this is steady-state sync between two already-shared
 // devices, not the one-time reset in runInitialSync (which discards a
@@ -209,6 +236,7 @@ function mergeSyncedFields(local: SyncedFields, remote: SyncedFields, excludeIds
     seenFollowUpCallIds: Array.from(new Set([...local.seenFollowUpCallIds, ...remote.seenFollowUpCallIds])),
     phoneCalls: remoteFetched > localFetched ? remote.phoneCalls : local.phoneCalls,
     phoneCallsFetchedAt: Math.max(localFetched, remoteFetched) || null,
+    feedbackItems: mergeFeedbackItems(local.feedbackItems, remote.feedbackItems),
   };
 }
 
@@ -374,6 +402,7 @@ const EMPTY_SYNCED_FIELDS: SyncedFields = {
   seenFollowUpCallIds: [],
   phoneCalls: null,
   phoneCallsFetchedAt: null,
+  feedbackItems: [],
 };
 
 function runInitialSync(): Promise<void> {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useChatStore } from "@/lib/store";
+import { sessionRecency, useChatStore } from "@/lib/store";
 import { AgentId } from "@/lib/agents";
 import { CheckIcon, MenuIcon, PlusIcon, SearchIcon, XIcon } from "./Icons";
 
@@ -106,7 +106,7 @@ export function SessionListView() {
   const keywords = useMemo(() => tokenize(query), [query]);
 
   const visibleSessions = useMemo(() => {
-    const list = [...sessions].sort((a, b) => b.createdAt - a.createdAt);
+    const list = [...sessions].sort((a, b) => sessionRecency(b) - sessionRecency(a));
     if (keywords.length === 0) return list;
     return list.filter((s) => {
       // Every keyword has to be present SOMEWHERE in the session — title
@@ -309,7 +309,7 @@ export function SessionListView() {
                     </span>
                   )}
                 </span>
-                <span className="shrink-0 text-[12.5px] text-zinc-400">{formatRelativeTime(sess.createdAt)}</span>
+                <span className="shrink-0 text-[12.5px] text-zinc-400">{formatRelativeTime(sessionRecency(sess))}</span>
               </button>
             );
           })

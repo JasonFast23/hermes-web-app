@@ -283,3 +283,11 @@ export function FileIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function FlagIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M5 21V4a1 1 0 0 1 1-1h11.5a1 1 0 0 1 .8 1.6l-3 4 3 4a1 1 0 0 1-.8 1.6H6" />
+    </svg>
+  );
+}

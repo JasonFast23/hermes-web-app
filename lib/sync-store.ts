@@ -16,6 +16,7 @@ export interface SyncedState {
   seenFollowUpCallIds: string[];
   phoneCalls: unknown;
   phoneCallsFetchedAt: number | null;
+  feedbackItems: unknown[];
 }
 
 interface SyncFile {

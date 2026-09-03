@@ -2,6 +2,17 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.16 — 2026-09-03
+
+- Delegating to a specialist no longer switches you onto their tab — you stay wherever you were (a banner shows who's working, with a "View" link if you want to watch), so it can't be mistaken for still talking to Eva and accidentally stopped mid-task.
+- Fixed Eva not actually having a specialist's findings to relay or email after a delegation reported back — she was only getting a short excerpt of the report, not the whole thing, which is why she'd sometimes ask you to paste the numbers back to her instead of just using them.
+- You can now send Eva another message while she's still working on the last one — it queues and sends the moment she's free, instead of the input blocking with Stop as the only option.
+- Added file upload — attach a PDF, Excel, or CSV to a message to Eva and she reads real figures out of it instead of guessing.
+- Fixed a message getting silently cut short when it ended with a colon and Enter was pressed to start a new line — Enter sends the message; Shift+Enter is what makes a new line, now hinted in the input.
+- The Chats list no longer reshuffles every time you open a session — only actual new activity (a message sent or received) moves it to the top.
+- Added a Feedback tab — post a bug or concern right in the app instead of emailing it over; it syncs across devices, and marking one fixed clears it with one click.
+- The Email and Research agents' tabs no longer accept typing directly — since you're meant to deal with Eva, not them, their input is replaced with a one-tap "Go to Eva" instead.
+
 ## 1.0.15 — 2026-08-28
 
 - Fixed the Approve/Decline buttons on a delegation card becoming unreachable when Eva hands off a long task (e.g. a long email body) during a voice session — the task text had no height limit, so a long one pushed the buttons off-screen with nothing scrollable to reach them. The task/purpose text is now capped and scrolls internally instead.

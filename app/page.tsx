@@ -6,6 +6,7 @@ import { ChatPanel } from "@/components/ChatPanel";
 import { TopBar } from "@/components/TopBar";
 import { SessionListView } from "@/components/SessionListView";
 import { PhoneView } from "@/components/PhoneView";
+import { FeedbackView } from "@/components/FeedbackView";
 import { NotificationListener } from "@/components/NotificationListener";
 import { useChatStore } from "@/lib/store";
 
@@ -63,6 +64,8 @@ export default function Home() {
           <SessionListView />
         ) : view === "phone" ? (
           <PhoneView />
+        ) : view === "feedback" ? (
+          <FeedbackView />
         ) : (
           <div className="flex min-w-0 flex-1 flex-col">
             <TopBar />

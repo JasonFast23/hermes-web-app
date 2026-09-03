@@ -2,10 +2,11 @@
 
 import { useMemo, useState } from "react";
 import { AGENTS, ENABLED_AGENT_IDS } from "@/lib/agents";
-import { ChatSession, useChatStore } from "@/lib/store";
+import { ChatSession, sessionRecency, useChatStore } from "@/lib/store";
 import { AboutModal } from "./AboutModal";
 import {
   AgentsIcon,
+  FlagIcon,
   InfoIcon,
   MessagingIcon,
   PanelToggleIcon,
@@ -38,9 +39,9 @@ function SessionStack({ onNavigate }: { onNavigate?: () => void }) {
   const groups = useMemo(() => {
     const bucket: Record<string, ChatSession[]> = {};
     [...sessions]
-      .sort((a, b) => b.createdAt - a.createdAt)
+      .sort((a, b) => sessionRecency(b) - sessionRecency(a))
       .forEach((sess) => {
-        const label = dateGroup(sess.createdAt);
+        const label = dateGroup(sessionRecency(sess));
         (bucket[label] ??= []).push(sess);
       });
     return bucket;
@@ -97,10 +98,12 @@ function CollapsedRail({
 }: {
   toggleSidebar: () => void;
   startNewSession: () => void;
-  view: "chat" | "sessions" | "phone";
-  setView: (view: "chat" | "sessions" | "phone") => void;
+  view: "chat" | "sessions" | "phone" | "feedback";
+  setView: (view: "chat" | "sessions" | "phone" | "feedback") => void;
   onOpenAbout: () => void;
 }) {
+  const openFeedbackCount = useChatStore((s) => s.feedbackItems.filter((f) => !f.resolved).length);
+
   return (
     <div className="flex h-full w-14 flex-col items-center py-3">
       <button
@@ -144,6 +147,20 @@ function CollapsedRail({
       </button>
       <button
         type="button"
+        aria-label="Feedback"
+        title="Feedback"
+        onClick={() => setView("feedback")}
+        className={`relative mt-2 flex h-9 w-9 items-center justify-center rounded-md ${
+          view === "feedback" ? "bg-black/[0.06] text-zinc-900" : "text-zinc-500 hover:bg-black/[0.05]"
+        }`}
+      >
+        <FlagIcon className="h-[18px] w-[18px]" />
+        {openFeedbackCount > 0 && (
+          <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-red-500" />
+        )}
+      </button>
+      <button
+        type="button"
         aria-label="About"
         title="About"
         onClick={onOpenAbout}
@@ -177,6 +194,11 @@ function SidebarPanel({
   const startNewSession = useChatStore((s) => s.startNewSession);
   const view = useChatStore((s) => s.view);
   const setView = useChatStore((s) => s.setView);
+  const activeDelegation = useChatStore((s) => s.activeDelegation);
+  const activeSessionId = useChatStore((s) => s.activeSessionId);
+  const busyAgentId =
+    activeDelegation && activeDelegation.sessionId === activeSessionId ? activeDelegation.targetAgentId : null;
+  const openFeedbackCount = useChatStore((s) => s.feedbackItems.filter((f) => !f.resolved).length);
 
   return (
     <div className="flex h-full w-[260px] shrink-0 flex-col">
@@ -234,6 +256,26 @@ function SidebarPanel({
           <PhoneIcon className="h-[18px] w-[18px] shrink-0 text-zinc-500" />
           <span className="truncate">Phone</span>
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            setView("feedback");
+            onNavigate?.();
+          }}
+          className={`flex items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[15px] transition-colors md:text-[13.5px] ${
+            view === "feedback"
+              ? "bg-black/[0.05] text-zinc-900"
+              : "text-zinc-600 hover:bg-black/[0.04]"
+          }`}
+        >
+          <FlagIcon className="h-[18px] w-[18px] shrink-0 text-zinc-500" />
+          <span className="truncate">Feedback</span>
+          {openFeedbackCount > 0 && (
+            <span className="ml-auto flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-red-500 px-1 text-[11px] font-medium text-white">
+              {openFeedbackCount}
+            </span>
+          )}
+        </button>
 
         <div className="mt-4 flex items-center gap-3 px-2.5 py-1.5 text-[15px] font-medium text-zinc-500 md:text-[13.5px]">
           <AgentsIcon className="h-[18px] w-[18px] shrink-0 text-zinc-500" />
@@ -266,6 +308,13 @@ function SidebarPanel({
                 }`}
               >
                 <span className="truncate">{label}</span>
+                {id === busyAgentId && (
+                  <span
+                    aria-label={`${label} is working`}
+                    title="Working…"
+                    className="ml-auto mr-2 h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-zinc-900"
+                  />
+                )}
               </button>
             );
           })}
