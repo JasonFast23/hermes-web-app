@@ -107,15 +107,6 @@ export function ChatInput() {
   }, [text]);
 
   const hasText = text.trim().length > 0;
-  // Priscilla's meant to deal with Eva, not the specialists directly — she
-  // was landing on Research/Email's tab mid-delegation and typing into it
-  // by accident, thinking she was still talking to Eva. delegateToAgent no
-  // longer force-navigates her there (see lib/store.ts), but the tabs
-  // themselves were still typeable, so a stray click could cause the same
-  // mix-up. Their tabs stay viewable (activity history, the delegation
-  // "View" link) — only the ability to type a NEW message into them is
-  // removed.
-  const isSpecialistTab = activeAgentId === "email" || activeAgentId === "graphic";
 
   return (
     <form
@@ -180,27 +171,19 @@ export function ChatInput() {
             ))}
           </div>
         )}
-        {/* The Fast/Deep toggle that used to live here only ever affected a
-            direct message typed into Research's own tab — Eva's own
-            delegations are hardcoded to fast (see lib/store.ts's
-            researchMode comment) — so it has nothing left to control now
-            that typing here is disabled (see isSpecialistTab). Deep mode
-            is consequently unreachable from the UI until/unless Eva grows
-            a way to ask for it on the user's behalf. */}
+        {/* Direct typing into Research/Email's own tabs is back on (was
+            disabled in v1.0.16 after Priscilla kept landing there
+            mid-delegation and typing messages meant for Eva into it by
+            accident). Re-enabled at the user's request as a way to reach a
+            specialist directly when Eva's delegation channel isn't working
+            for a given task — accept that the mix-up this originally
+            guarded against can recur. The Fast/Deep toggle that used to
+            live here for a direct Research message hasn't been restored;
+            a message typed straight into Research's tab runs in whatever
+            researchFastMode currently defaults to (see lib/store.ts). */}
 
         {voiceOpen ? (
           <VoiceSession onClose={() => setVoiceOpen(false)} />
-        ) : isSpecialistTab ? (
-          <div className="flex items-center justify-between gap-3 rounded-3xl border border-black/[0.07] bg-zinc-50 px-4 py-3 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-            <span className="text-sm text-zinc-400">Message Eva instead — she&apos;ll route this to the right specialist.</span>
-            <button
-              type="button"
-              onClick={() => setActiveAgent("jarvis")}
-              className="shrink-0 rounded-full bg-zinc-900 px-3.5 py-1.5 text-[13px] font-medium text-white hover:bg-zinc-700"
-            >
-              Go to Eva
-            </button>
-          </div>
         ) : (
           <div className="flex items-center gap-2 rounded-3xl border border-black/[0.07] bg-white px-2 py-2 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.05)]">
             {activeAgentId === "jarvis" && (

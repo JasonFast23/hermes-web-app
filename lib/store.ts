@@ -401,7 +401,7 @@ const DELEGATE_TARGETS: Record<string, AgentId> = {
 // RESEARCH_DEEP_MODE_CONTEXT. No suffix defaults to fast (processDelegateMarker),
 // matching "quick answer by default, offer to go deeper" rather than the
 // old always-unrestricted delegation behavior.
-const DELEGATE_MARKER = /^\[\[DELEGATE:(email|research|phone)(?::(fast|deep))?\]\][ \t]*(.*)$/m;
+const DELEGATE_MARKER = /^\[\[DELEGATE:(email|research|phone)(?::(fast|deep))?\]\][ \t]*([\s\S]*)$/m;
 
 // Parses phone's "<number>|<purpose>" task format (see lib/agents.ts) —
 // deliberately permissive about the number's exact formatting (spaces,
@@ -1641,6 +1641,21 @@ export const useChatStore = create<ChatState>()(
           // unaffected.
           const isFastResearch = targetAgentId === "graphic" && researchMode !== "deep";
 
+          // Eva's delegation task text is the primary way data reaches the
+          // target agent, but it depends on her actually transcribing
+          // another agent's findings into it correctly — a manual step
+          // that's easy to lose data through (see DELEGATE_MARKER above for
+          // the transmission half of that problem). Handing the target
+          // agent the same other-agents'-findings block Eva herself sees
+          // (buildAgentActivityContext) is a safety net for the other
+          // half: e.g. a delegation to Email that only says "fill in the
+          // 2026 columns using the research already done" still gives
+          // Email direct access to Research's actual numbers, rather than
+          // relying entirely on Eva to have copied them all into the task.
+          const activityContext = buildAgentActivityContext(
+            get().sessions.find((s) => s.id === sessionId)
+          );
+
           try {
             const result = await streamChatCompletion(
               targetAgentId,
@@ -1650,10 +1665,11 @@ export const useChatStore = create<ChatState>()(
               handleToolEvent,
               controller.signal,
               targetAgentId === "graphic"
-                ? isFastResearch
-                  ? RESEARCH_FAST_MODE_CONTEXT
-                  : RESEARCH_DEEP_MODE_CONTEXT
-                : undefined,
+                ? combineContext(
+                    isFastResearch ? RESEARCH_FAST_MODE_CONTEXT : RESEARCH_DEEP_MODE_CONTEXT,
+                    activityContext
+                  )
+                : activityContext,
               isFastResearch ? ["web", "skills"] : undefined
             );
 

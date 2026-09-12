@@ -99,7 +99,7 @@ export function PendingDelegationCard() {
         <span className="font-medium">{source.name}</span> wants to hand this to{" "}
         <span className="font-medium">{target.name}</span>:
       </p>
-      <p className="mt-1 max-h-[30vh] overflow-y-auto text-sm italic text-zinc-500">
+      <p className="mt-1 max-h-[30vh] overflow-y-auto whitespace-pre-wrap text-sm italic text-zinc-500">
         &ldquo;{pendingDelegation.task}&rdquo;
       </p>
       <div className="mt-3 flex gap-2">

@@ -2,6 +2,12 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.17 — 2026-09-12
+
+- Fixed Eva's delegation messages silently losing everything after the first line — a long town list, parcel list, or research summary handed to Research or Email was cut down to just the first sentence in transit, which is why the specialist kept saying it never received the data even when Eva sent it. Multi-line tasks now arrive whole.
+- Email now automatically sees the same "other agents' latest findings" digest Eva relies on, instead of only whatever Eva managed to retype into the delegation task by hand — so a request like "fill in the workbook using the research already done" actually has the numbers to work with.
+- The Email and Research tabs accept direct typing again — you can message a specialist yourself instead of only going through Eva.
+
 ## 1.0.16 — 2026-09-03
 
 - Delegating to a specialist no longer switches you onto their tab — you stay wherever you were (a banner shows who's working, with a "View" link if you want to watch), so it can't be mistaken for still talking to Eva and accidentally stopped mid-task.
