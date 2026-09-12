@@ -2,6 +2,10 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.18 — 2026-09-12
+
+- Fixed a session's recent activity getting lost across devices — merging another device's sync update rebuilt the session without carrying over when it was last actually used, silently falling back to its original creation date. A chat someone was actively using days ago could sort into "Older" as if it hadn't been touched since it was first created. Also fixed the same merge dropping a session's attached files.
+
 ## 1.0.17 — 2026-09-12
 
 - Fixed Eva's delegation messages silently losing everything after the first line — a long town list, parcel list, or research summary handed to Research or Email was cut down to just the first sentence in transit, which is why the specialist kept saying it never received the data even when Eva sent it. Multi-line tasks now arrive whole.

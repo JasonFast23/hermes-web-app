@@ -15,7 +15,7 @@
 // right after creating the store to apply remote updates via setState.
 import type { StateStorage } from "zustand/middleware";
 import type { AgentId } from "./agents";
-import type { ChatSession, ChatMessage, CallSummary, FeedbackItem } from "./store";
+import type { ChatSession, ChatMessage, CallSummary, FeedbackItem, AttachedFile } from "./store";
 import { getDeletedIds } from "./sync-tombstones";
 import { BUILD_ID } from "./build-id";
 
@@ -161,6 +161,24 @@ function mergeMessages(a: ChatMessage[], b: ChatMessage[]): ChatMessage[] {
   return order.map((id) => byId.get(id)!);
 }
 
+// Union by id, same shape as mergeFeedbackItems — a file attached on either
+// device should survive the merge, not just whichever side happened to be
+// treated as the base.
+function mergeAttachedFiles(a: AttachedFile[], b: AttachedFile[]): AttachedFile[] {
+  const byId = new Map<string, AttachedFile>();
+  const order: string[] = [];
+  const addAll = (list: AttachedFile[]) => {
+    for (const f of list) {
+      if (byId.has(f.id)) continue;
+      order.push(f.id);
+      byId.set(f.id, f);
+    }
+  };
+  addAll(a);
+  addAll(b);
+  return order.map((id) => byId.get(id)!);
+}
+
 function mergeSession(a: ChatSession, b: ChatSession): ChatSession {
   const agentIds = new Set<AgentId>([
     ...(Object.keys(a.threads) as AgentId[]),
@@ -174,8 +192,16 @@ function mergeSession(a: ChatSession, b: ChatSession): ChatSession {
     id: a.id,
     title: a.title !== "New session" ? a.title : b.title,
     createdAt: Math.min(a.createdAt, b.createdAt),
+    // Rebuilding the session from scratch here previously dropped this
+    // field entirely (it's optional, so the object just came out without
+    // it) — sessionRecency() then silently fell back to createdAt, which is
+    // why a session someone was actively using days ago could sort as if
+    // it hadn't been touched since it was first created, sinking it into
+    // "Older" instead of floating to the top like real recent activity.
+    lastActiveAt: Math.max(a.lastActiveAt ?? a.createdAt, b.lastActiveAt ?? b.createdAt),
     threads,
     agentActivity: a.agentActivity.length >= b.agentActivity.length ? a.agentActivity : b.agentActivity,
+    attachedFiles: mergeAttachedFiles(a.attachedFiles ?? [], b.attachedFiles ?? []),
   };
 }
 
