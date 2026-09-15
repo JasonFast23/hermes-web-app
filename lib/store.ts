@@ -583,7 +583,18 @@ const RESEARCH_FAST_MODE_CONTEXT =
   "must match that speed: short, plain, natural language — the direct " +
   "answer plus just enough context to make it useful, the way an AI " +
   "Overview reads, not a research brief. Skip exhaustive caveat lists. " +
-  "Still ground it in something real and cite that source. If they want " +
+  "Still ground it in something real and cite that source. This speed " +
+  "constraint is about how MANY sources you check and how long your " +
+  "answer runs, not which tool you're allowed to use to check the ONE " +
+  "source that matters — your browser tool is available here same as " +
+  "always, and a quick search's snippet can be a stale, months-old " +
+  "index of a page rather than what's actually there right now. For a " +
+  "source you're treating as authoritative (an official/government " +
+  "page, a specific figure someone will rely on), load it directly with " +
+  "the browser tool instead of trusting a search snippet at face value " +
+  "— that's still one source, still fast, and it's the difference " +
+  "between reporting what a page actually says today versus what a " +
+  "search index cached from it a year ago. If they want " +
   "more depth after this, they'll ask — don't pre-empt that here. If " +
   "this ends up taking more than one search, the moment a search or " +
   "page gives you a real fact or number, state it plainly right then, " +
@@ -1411,12 +1422,18 @@ export const useChatStore = create<ChatState>()(
                     ? RESEARCH_FAST_MODE_CONTEXT
                     : RESEARCH_DEEP_MODE_CONTEXT
                   : undefined,
-              // Fast can't reach for the browser tool at all — rendering a
-              // full page is the slowest thing this agent can do, so it's
-              // dropped from what's available rather than just discouraged
-              // in the prompt above. "web" (search) and "skills" stay
-              // available since neither involves rendering a page.
-              researchFast ? ["web", "skills"] : undefined
+              // Fast used to drop the browser tool entirely (rendering a
+              // full page is the slowest thing this agent can do), leaving
+              // only web_search/web_extract — but those are backed by a
+              // search index that can be stale by months for a small town's
+              // site, and confirmed (Scarborough, 2026-09) to silently miss
+              // a JS-rendered data table that only a real rendered page
+              // shows. Wrong-but-confident government/tax figures are a
+              // worse outcome than a slightly slower answer for exactly the
+              // kind of source this app cares most about, so Fast keeps its
+              // speed-oriented pacing/style (see RESEARCH_FAST_MODE_CONTEXT)
+              // but gets the same full toolset as Deep now.
+              undefined
             );
 
             // Awaited (not fire-and-forget) so isStreaming — and the Stop
@@ -1600,7 +1617,16 @@ export const useChatStore = create<ChatState>()(
                     fileContext
                   )
                 : combineContext(activityContext, fileContext),
-              isFastResearch ? ["web", "skills"] : undefined
+              // Fast used to drop the browser tool entirely, leaving only
+              // web_search/web_extract — see the identical note in
+              // sendMessage above for why that got reversed (a stale search
+              // index and a JS-rendered table a plain fetch can't see
+              // produced a confidently wrong tax rate/commitment date for a
+              // real town). Eva's own delegation always runs Fast (never
+              // Deep — see isFastResearch above), so this specifically
+              // matters here: it's the toolset every one of her research
+              // hand-offs actually runs with.
+              undefined
             );
 
             // Research and Email may now each propose handing off to the

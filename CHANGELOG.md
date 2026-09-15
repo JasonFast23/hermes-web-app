@@ -2,6 +2,10 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.21 — 2026-09-15
+
+- Fixed Research reporting a confidently wrong tax rate and commitment date for a town (Scarborough) even though the correct figures were right there on the page it cited as its source. Traced to the actual tool calls: Fast mode's quick search was returning a stale, months-old cached snapshot of the page, and the fetch-only fallback couldn't see the current data because it's rendered by JavaScript. Fast research now has the same live-browser tool Deep mode already has — it still moves fast and checks the same handful of sources, but loads an authoritative source directly instead of trusting a cached search snippet.
+
 ## 1.0.20 — 2026-09-15
 
 - Fixed Email/Research marking fields "CALL ASSESSOR" (or otherwise missing) that the other agent actually already had an answer for — a delegation only ever received the last 500 characters of the other agent's report, so most of a long multi-town research table silently never reached whoever Eva handed the follow-up task to. Delegations now always carry the other agent's full report.
