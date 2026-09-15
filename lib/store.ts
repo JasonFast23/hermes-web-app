@@ -1564,9 +1564,15 @@ export const useChatStore = create<ChatState>()(
           // 2026 columns using the research already done" still gives
           // Email direct access to Research's actual numbers, rather than
           // relying entirely on Eva to have copied them all into the task.
-          const activityContext = buildAgentActivityContext(
-            get().sessions.find((s) => s.id === sessionId)
-          );
+          const delegationSession = get().sessions.find((s) => s.id === sessionId);
+          const activityContext = buildAgentActivityContext(delegationSession);
+          // Same gap as above, but for a file the user actually attached
+          // (session.attachedFiles) — sendMessage already hands this to
+          // Eva's own chat via buildFileContext, but a delegation never
+          // included it, so a subagent had no way to see an attached
+          // workbook/PDF at all and could only work from whatever Eva
+          // retyped into the task text by hand.
+          const fileContext = buildFileContext(delegationSession);
 
           try {
             const result = await streamChatCompletion(
@@ -1579,9 +1585,10 @@ export const useChatStore = create<ChatState>()(
               targetAgentId === "graphic"
                 ? combineContext(
                     isFastResearch ? RESEARCH_FAST_MODE_CONTEXT : RESEARCH_DEEP_MODE_CONTEXT,
-                    activityContext
+                    activityContext,
+                    fileContext
                   )
-                : activityContext,
+                : combineContext(activityContext, fileContext),
               isFastResearch ? ["web", "skills"] : undefined
             );
 

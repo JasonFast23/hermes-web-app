@@ -2,6 +2,10 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.19 — 2026-09-15
+
+- Fixed a file you attached to a message to Eva (a spreadsheet, PDF) never actually reaching the Email or Research agent when she delegated to them — only her own chat had access to it. This is why Email kept reporting it couldn't find an attached workbook no matter how many times it was re-attached; delegated tasks now carry the file's contents the same way Eva's own replies already do.
+
 ## 1.0.18 — 2026-09-15
 
 - Removed Eva's ability to delegate to a phone call entirely — she'll now say plainly that placing calls isn't something this app can do, instead of proposing one. (A dedicated calling flow, run directly from the Phone tab, is planned separately.)
