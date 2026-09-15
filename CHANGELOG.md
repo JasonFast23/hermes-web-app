@@ -2,6 +2,13 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.20 — 2026-09-15
+
+- Fixed Email/Research marking fields "CALL ASSESSOR" (or otherwise missing) that the other agent actually already had an answer for — a delegation only ever received the last 500 characters of the other agent's report, so most of a long multi-town research table silently never reached whoever Eva handed the follow-up task to. Delegations now always carry the other agent's full report.
+- Research now has to back up any number it cites with the exact wording it appeared as on the source page, not just a link — a wrong figure and a wrong quote essentially never happen together by accident, so this makes a misread visible without having to click through and check it yourself. It also has to explicitly double-check it's reading the right entity and the right year before finalizing a page's numbers, since grabbing the wrong row/year on a page showing several is a common real mistake.
+- Research can now attach an actual screenshot of a source page as visual proof for a figure worth double-checking, instead of only a link — this renders as a real inline image in the chat, not just a citation.
+- Eva no longer forwards a request for something she's already told the user isn't possible (currently: phone calls) — she used to still pass that part along for the other agent to decline all over again instead of just leaving it out.
+
 ## 1.0.19 — 2026-09-15
 
 - Fixed a file you attached to a message to Eva (a spreadsheet, PDF) never actually reaching the Email or Research agent when she delegated to them — only her own chat had access to it. This is why Email kept reporting it couldn't find an attached workbook no matter how many times it was re-attached; delegated tasks now carry the file's contents the same way Eva's own replies already do.

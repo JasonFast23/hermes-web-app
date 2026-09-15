@@ -167,20 +167,65 @@ function FileCard({ fileId, filename }: { fileId: string; filename: string }) {
   );
 }
 
-// Splits on SHOWFILE markers first (rendered as file cards), running the
-// rest of each text segment through renderInline() (bold + links) as before.
-function renderContent(text: string, highlightQuery?: string, glow?: boolean): ReactNode[] {
+// Research can take a real screenshot of a source page (its browser tool's
+// vision/screenshot command) to back up a figure the user would otherwise
+// have to click through and verify themselves — see its system prompt. The
+// Hermes backend (gateway/platforms/api_server.py's _resolve_media_to_data_urls)
+// already rewrites the model's own "MEDIA:<path>" tag into standard Markdown
+// image syntax with the image inlined as a base64 data URL before it ever
+// reaches us, specifically because a remote API client like this app can't
+// read a local file path on the server — so this only ever needs to render
+// an already-self-contained data: URL, never fetch anything itself.
+const IMAGE_MARKDOWN_PATTERN = /!\[([^\]]*)\]\((data:image\/(?:png|jpe?g|webp);base64,[A-Za-z0-9+/=]+)\)/g;
+
+function ScreenshotImage({ alt, src }: { alt: string; src: string }) {
+  return (
+    <a
+      href={src}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="my-1.5 block overflow-hidden rounded-xl border border-black/[0.08] bg-white"
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={src} alt={alt || "Screenshot"} className="max-h-80 w-full bg-zinc-50 object-contain" />
+    </a>
+  );
+}
+
+// Splits on SHOWFILE markers, rendering the rest of each text segment
+// through renderInline() (bold + links) as before.
+function renderShowfileSegment(text: string, highlightQuery?: string, glow?: boolean, keyPrefix = "seg"): ReactNode[] {
   const parts = text.split(SHOWFILE_PATTERN);
   const nodes: ReactNode[] = [];
 
   for (let i = 0; i < parts.length; i += 3) {
     const textPart = parts[i];
-    if (textPart) nodes.push(...renderInline(textPart, `seg-${i}`, highlightQuery, glow));
+    if (textPart) nodes.push(...renderInline(textPart, `${keyPrefix}-${i}`, highlightQuery, glow));
 
     const fileId = parts[i + 1];
     const filename = parts[i + 2];
     if (fileId && filename) {
-      nodes.push(<FileCard key={`file-${fileId}-${i}`} fileId={fileId} filename={filename.trim()} />);
+      nodes.push(<FileCard key={`file-${fileId}-${keyPrefix}-${i}`} fileId={fileId} filename={filename.trim()} />);
+    }
+  }
+
+  return nodes;
+}
+
+// Splits on inline screenshot images first (rendered as image cards),
+// running the rest of each text segment through renderShowfileSegment().
+function renderContent(text: string, highlightQuery?: string, glow?: boolean): ReactNode[] {
+  const parts = text.split(IMAGE_MARKDOWN_PATTERN);
+  const nodes: ReactNode[] = [];
+
+  for (let i = 0; i < parts.length; i += 3) {
+    const textPart = parts[i];
+    if (textPart) nodes.push(...renderShowfileSegment(textPart, highlightQuery, glow, `img-${i}`));
+
+    const alt = parts[i + 1];
+    const dataUrl = parts[i + 2];
+    if (dataUrl) {
+      nodes.push(<ScreenshotImage key={`shot-${i}`} alt={alt} src={dataUrl} />);
     }
   }
 

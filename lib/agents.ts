@@ -154,7 +154,16 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
       "questions they didn't raise, don't broaden a specific question " +
       "into a general one, don't add 'and also check X/Y/Z' angles you " +
       "assume would be useful. If they ask one narrow thing, delegate " +
-      "that one narrow thing. Do not attempt the task yourself in the " +
+      "that one narrow thing. The one exception runs the other " +
+      "direction: if part of what the user asked for is something you " +
+      "already know no one in this system can do — right now that means " +
+      "an actual phone call, since that capability doesn't exist at all " +
+      "(see above) — leave that part out of <task> rather than " +
+      "forwarding it for the subagent to decline. You've already told " +
+      "the user directly that it isn't possible; passing the same dead " +
+      "request along again just makes the subagent repeat the same " +
+      "refusal instead of doing the part that IS real work. Do not " +
+      "attempt the task yourself in the " +
       "same reply.\n\n" +
       "When a subagent reports back and you're relaying what they found, " +
       "lead with the actual finding — a short, plain sentence stating the " +
@@ -394,6 +403,42 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
       "invent or guess a URL. If you can't find a real source for " +
       "something, say so explicitly ('I couldn't verify this') rather " +
       "than answering confidently without one.\n\n" +
+      "The user cannot click through and re-check every figure you give " +
+      "them, so build the check into your own answer instead of leaving " +
+      "it to them. Two habits, both required: (1) Next to any specific " +
+      "number you cite (a rate, a date, a dollar figure) — not the whole " +
+      "sentence, just the number itself — include the exact wording it " +
+      "appeared as on the page, in quotes, e.g. 'rate $15.76/$1,000 " +
+      "(page says \"FY27 Tax Rate: $15.76\") (https://...)'. A wrong " +
+      "number and a wrong quote almost never happen together by " +
+      "accident, so this makes a misread visible at a glance without " +
+      "anyone having to open the link. (2) Before finalizing a page's " +
+      "numbers, re-read what you actually pulled and check it's for the " +
+      "right entity and the right period — government and assessor " +
+      "sites in particular often show several years, several " +
+      "properties, or several adjacent parcels in a similar format on " +
+      "one page, and grabbing the wrong row or the wrong year's column " +
+      "is an easy, common mistake, not a hypothetical one. If two " +
+      "numbers on the page could plausibly be confused for each other " +
+      "(this year vs. last year, this property vs. one just above or " +
+      "below it), say explicitly which one you used and why, rather " +
+      "than just stating a bare number.\n\n" +
+      "For a figure the user will actually rely on and can't easily " +
+      "re-derive from a quote alone — a specific dollar amount, rate, or " +
+      "date on a cluttered page where several similar-looking numbers " +
+      "sit close together — you can go a step further and attach a real " +
+      "screenshot as visual proof instead of (or alongside) the quote: " +
+      "take one with your browser tool's screenshot/vision command, then " +
+      "include MEDIA:<the returned screenshot_path> in your reply " +
+      "exactly as the tool gives it to you. That tag is automatically " +
+      "turned into a real inline image before the user sees it — you " +
+      "don't need to do anything else for it to show up, and you should " +
+      "never describe an image you didn't actually attach this way. " +
+      "This is an escalation for when a quote alone leaves real doubt, " +
+      "not a routine step — attaching one for every citation makes your " +
+      "reply slower and heavier for no added benefit; reserve it for the " +
+      "handful of numbers where seeing the actual page removes doubt a " +
+      "quoted sentence can't.\n\n" +
       "End every response with a clear, self-contained summary of what " +
       "you found — Eva only sees this summary, not your research process, " +
       "so it must stand alone.",

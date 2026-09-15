@@ -444,7 +444,18 @@ function buildAgentActivityContext(
   // incomplete quote, and she'll hedge ("I don't want to make up the
   // amounts") rather than risk it. Fine to do here because it's a single
   // turn, not resent indefinitely — every later turn still excerpts it.
-  fullForAgentId?: AgentId
+  fullForAgentId?: AgentId,
+  // Set by delegateToAgent: unlike Eva's own chat (where this block is
+  // resent on every turn, so truncating keeps her replies from clipping
+  // short across the board — see AGENT_ACTIVITY_EXCERPT_CHARS), a
+  // delegation only injects this ONCE, and the target agent has no other
+  // way to see another agent's findings at all. Excerpting there doesn't
+  // save anything and silently drops most of a long report (e.g. a
+  // 21-town research table) down to whichever towns happened to survive
+  // in the last 500 characters — which is exactly why Email was marking
+  // towns "CALL ASSESSOR" that Research actually had answers for. A
+  // one-time delegation payload should always be the full report.
+  full?: boolean
 ): string | undefined {
   const entries = session?.agentActivity ?? [];
   if (entries.length === 0) return undefined;
@@ -454,7 +465,7 @@ function buildAgentActivityContext(
 
   const lines = Array.from(latestByAgent.values()).map((e) => {
     const name = AGENTS[e.agentId].name;
-    const isTruncated = e.agentId !== fullForAgentId && e.summary.length > AGENT_ACTIVITY_EXCERPT_CHARS;
+    const isTruncated = !full && e.agentId !== fullForAgentId && e.summary.length > AGENT_ACTIVITY_EXCERPT_CHARS;
     // Keep the TAIL, not the head — Research's reply can now open with a
     // run of brief "found X, checking Y next" notes (see
     // RESEARCH_DEEP_MODE_CONTEXT) before its actual structured answer at
@@ -1565,7 +1576,7 @@ export const useChatStore = create<ChatState>()(
           // Email direct access to Research's actual numbers, rather than
           // relying entirely on Eva to have copied them all into the task.
           const delegationSession = get().sessions.find((s) => s.id === sessionId);
-          const activityContext = buildAgentActivityContext(delegationSession);
+          const activityContext = buildAgentActivityContext(delegationSession, undefined, true);
           // Same gap as above, but for a file the user actually attached
           // (session.attachedFiles) — sendMessage already hands this to
           // Eva's own chat via buildFileContext, but a delegation never
