@@ -178,8 +178,6 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
   const askEva = useChatStore((s) => s.askEva);
   const approveDelegation = useChatStore((s) => s.approveDelegation);
   const setVoiceApproveDelegation = useChatStore((s) => s.setVoiceApproveDelegation);
-  const approvePhoneCall = useChatStore((s) => s.approvePhoneCall);
-  const setVoiceApprovePhoneCall = useChatStore((s) => s.setVoiceApprovePhoneCall);
   const voiceVolume = useChatStore((s) => s.voiceVolume);
   const audioInputDeviceId = useChatStore((s) => s.audioInputDeviceId);
   const audioOutputDeviceId = useChatStore((s) => s.audioOutputDeviceId);
@@ -483,46 +481,6 @@ export function VoiceSession({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     setVoiceApproveDelegation(speakDelegationResult);
     return () => setVoiceApproveDelegation(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Same idea as speakDelegationResult, for approving a proposed real
-  // phone call mid-voice-session — but simpler: approvePhoneCall returns
-  // one finished confirmation/error sentence rather than a stream, so
-  // there's nothing to chunk through speakStreamed, just one clip to
-  // enqueue directly.
-  const speakPhoneCallResult = async () => {
-    const controller = new AbortController();
-    abortRef.current = controller;
-    speechChainRef.current = Promise.resolve();
-    previousSpokenTextRef.current = "";
-    turnStartRef.current = performance.now();
-    sentenceIndexRef.current = 0;
-    lastPlaybackEndRef.current = 0;
-    mark("phone call approved (voice)");
-
-    try {
-      setStatus("thinking");
-      const text = await approvePhoneCall();
-      if (controller.signal.aborted) return;
-      setStatus("speaking");
-      startLevelLoop();
-      enqueueSpeech(text, controller.signal);
-      await speechChainRef.current;
-      stopLevelLoop();
-      mark("phone call confirmation done (all audio finished playing)");
-      if (!controller.signal.aborted) setStatus("idle");
-    } catch (err) {
-      if (controller.signal.aborted) return;
-      stopLevelLoop();
-      setErrorMessage(err instanceof Error ? err.message : "Something went wrong");
-      setStatus("error");
-    }
-  };
-
-  useEffect(() => {
-    setVoiceApprovePhoneCall(speakPhoneCallResult);
-    return () => setVoiceApprovePhoneCall(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

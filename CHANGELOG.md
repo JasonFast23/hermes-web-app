@@ -2,6 +2,12 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.18 — 2026-09-15
+
+- Removed Eva's ability to delegate to a phone call entirely — she'll now say plainly that placing calls isn't something this app can do, instead of proposing one. (A dedicated calling flow, run directly from the Phone tab, is planned separately.)
+- Fixed a bug where a delegation marker that couldn't actually run (e.g. one bundling more than it should have) could leak raw internal `[[DELEGATE:...]]` syntax into the chat instead of a clean message.
+- Fixed Eva sometimes treating a request that only mentions calling as part of a larger task (e.g. "find the missing figures, calling the office if needed") as if it were a direct instruction to call, instead of delegating the whole thing to Research. Explicitly naming a target agent ("send it to the research agent") is now honored directly too.
+
 ## 1.0.17 — 2026-09-12
 
 - Fixed Eva's delegation messages silently losing everything after the first line — a long town list, parcel list, or research summary handed to Research or Email was cut down to just the first sentence in transit, which is why the specialist kept saying it never received the data even when Eva sent it. Multi-line tasks now arrive whole.

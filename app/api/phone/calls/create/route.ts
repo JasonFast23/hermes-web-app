@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-// Real outbound call — Eva actually dials a number, live, over the
-// telephone network. Only reachable via the approved pendingPhoneCall
-// flow in lib/store.ts (Eva proposes it, the user has to click Approve),
-// never triggered on Eva's own initiative mid-conversation.
+// Real outbound call — dials a number, live, over the telephone network.
+// Eva no longer has any path to trigger this (delegate-to-phone was
+// removed; see lib/agents.ts and lib/store.ts) — this endpoint is
+// currently unused, kept for a future manual dialer in the Phone tab.
 
 // US numbers only (this whole feature is one Retell US number). Accepts
 // whatever loose format the model or a person typed — a formatted
