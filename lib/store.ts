@@ -169,7 +169,7 @@ export interface PendingPhoneBatch {
 // before that ever happens, which "failed" without a callId covers.
 export interface PhoneBatchCallState extends PhoneBatchCallSpec {
   callId: string | null;
-  status: "queued" | "calling" | "done" | "timeout" | "failed";
+  status: "queued" | "calling" | "done" | "timeout" | "failed" | "cancelled";
   // Retell's own post-call analysis summary (call_analysis.call_summary),
   // once available — this is what actually answers the call's <purpose>.
   summary?: string;
@@ -1277,7 +1277,7 @@ export const useChatStore = create<ChatState>()(
       // common case here. Polling this app's own /api/phone/calls/[callId]
       // works for every call regardless of that flag, and doesn't depend
       // on a notification path scoped for a different purpose.
-      const runPhoneBatch = async () => {
+      const runPhoneBatch = async (signal: AbortSignal) => {
         const batch = get().activePhoneBatch;
         if (!batch) return;
 
@@ -1289,31 +1289,60 @@ export const useChatStore = create<ChatState>()(
           });
         };
 
+        // A setTimeout that resolves early if the batch is cancelled mid-
+        // wait, instead of always sitting through the full interval — this
+        // is what makes Stop actually responsive during a batch rather
+        // than just flipping a flag the poll loop won't notice for up to
+        // PHONE_BATCH_POLL_MS.
+        const abortableWait = (ms: number): Promise<void> =>
+          new Promise((resolve) => {
+            if (signal.aborted) return resolve();
+            const onAbort = () => {
+              clearTimeout(timer);
+              resolve();
+            };
+            const timer = setTimeout(() => {
+              signal.removeEventListener("abort", onAbort);
+              resolve();
+            }, ms);
+            signal.addEventListener("abort", onAbort, { once: true });
+          });
+
         // Polls this call's detail every PHONE_BATCH_POLL_MS until its
         // analysis is ready, the call itself reports a terminal error
-        // status, or PHONE_BATCH_CALL_TIMEOUT_MS elapses — whichever comes
-        // first. Returns the last detail fetched (possibly null/incomplete
-        // on a timeout) rather than throwing, since a stalled call is a
-        // per-call outcome to report, not a batch-ending failure.
+        // status, PHONE_BATCH_CALL_TIMEOUT_MS elapses, or the batch is
+        // cancelled — whichever comes first. Returns the last detail
+        // fetched (possibly null/incomplete) rather than throwing, since a
+        // stalled or cancelled call is a per-call outcome to report, not a
+        // batch-ending failure — the real call (if it actually connected)
+        // keeps running on Retell's side regardless of whether this app
+        // keeps watching it; there's no "hang up" call here, only "stop
+        // waiting on it."
         const pollUntilDone = async (
           callId: string
-        ): Promise<{ status: "done" | "timeout"; summary?: string; recordingUrl?: string }> => {
+        ): Promise<{ status: "done" | "timeout" | "cancelled"; summary?: string; recordingUrl?: string }> => {
           const deadline = Date.now() + PHONE_BATCH_CALL_TIMEOUT_MS;
           for (;;) {
+            if (signal.aborted) return { status: "cancelled" };
             const detail = await fetch(`/api/phone/calls/${callId}`)
               .then((r) => r.json())
               .catch(() => null);
             const summary: string | undefined = detail?.call_analysis?.call_summary;
             if (summary) return { status: "done", summary, recordingUrl: detail?.recording_url };
             if (detail?.call_status === "error") return { status: "timeout" };
+            if (signal.aborted) return { status: "cancelled" };
             if (Date.now() >= deadline) return { status: "timeout" };
-            await new Promise((r) => setTimeout(r, PHONE_BATCH_POLL_MS));
+            await abortableWait(PHONE_BATCH_POLL_MS);
           }
         };
 
         const placeOne = async (index: number) => {
           const call = get().activePhoneBatch?.calls[index];
           if (!call) return;
+          if (signal.aborted) {
+            updateCall(index, { status: "cancelled", error: "Cancelled before this call was placed." });
+            return;
+          }
           updateCall(index, { status: "calling" });
 
           let callId: string;
@@ -1342,6 +1371,12 @@ export const useChatStore = create<ChatState>()(
 
           if (result.status === "done") {
             updateCall(index, { status: "done", summary: result.summary, recordingUrl: result.recordingUrl });
+          } else if (result.status === "cancelled") {
+            // The call itself may still be live on Retell's side (there's
+            // no "hang up" call here) — this only means the app stopped
+            // waiting on it, which is what the user actually asked for by
+            // hitting Stop.
+            updateCall(index, { status: "cancelled", error: "Cancelled by user before this call finished." });
           } else {
             updateCall(index, { status: "timeout", error: "No result came back for this call in time." });
           }
@@ -1351,6 +1386,7 @@ export const useChatStore = create<ChatState>()(
         let nextIndex = 0;
         const worker = async () => {
           for (;;) {
+            if (signal.aborted) return;
             const i = nextIndex++;
             if (i >= total) return;
             await placeOne(i);
@@ -1361,8 +1397,10 @@ export const useChatStore = create<ChatState>()(
         const finished = get().activePhoneBatch;
         if (!finished) return; // cleared mid-run — nothing left to report
 
+        const wasCancelled = signal.aborted;
         const report =
-          `Placed ${total} call${total === 1 ? "" : "s"}:\n\n` +
+          `Placed ${total} call${total === 1 ? "" : "s"}` +
+          `${wasCancelled ? " (user stopped the batch before it fully finished)" : ""}:\n\n` +
           finished.calls
             .map((c) => {
               const label = `${formatPhoneNumberLocal(c.number)} — ${c.purpose}`;
@@ -1640,9 +1678,16 @@ export const useChatStore = create<ChatState>()(
         approvePhoneBatch: async () => {
           const pending = get().pendingPhoneBatch;
           if (!pending) return;
+          // Reuses the same activeAbortController the Stop button already
+          // triggers for every other in-flight action — this is what makes
+          // Stop actually cancel a stuck batch instead of doing nothing (a
+          // batch call never had a controller wired to it before, so Stop
+          // was a dead button here even though it was visible).
+          const controller = new AbortController();
           set({
             pendingPhoneBatch: null,
             isStreaming: true,
+            activeAbortController: controller,
             activePhoneBatch: {
               sessionId: pending.sessionId,
               fromAgentId: pending.fromAgentId,
@@ -1651,9 +1696,9 @@ export const useChatStore = create<ChatState>()(
             },
           });
           try {
-            await runPhoneBatch();
+            await runPhoneBatch(controller.signal);
           } finally {
-            set({ isStreaming: false, activePhoneBatch: null });
+            set({ isStreaming: false, activeAbortController: null, activePhoneBatch: null });
             drainMessageQueue();
           }
         },

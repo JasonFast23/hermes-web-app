@@ -10,6 +10,7 @@ const PHONE_CALL_STATUS_LABEL: Record<string, string> = {
   done: "Done",
   timeout: "No answer in time",
   failed: "Couldn't place",
+  cancelled: "Cancelled",
 };
 
 // Shown whenever processDelegateMarker has parked a delegation or a phone

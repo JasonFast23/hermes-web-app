@@ -2,6 +2,10 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.23 — 2026-09-15
+
+- Fixed Stop doing nothing during a phone batch — a stalled call (busy line, no answer) had no way to interrupt it short of waiting out the full 5-minute per-call timeout. Stop now actually cancels a running batch: any call still waiting is marked cancelled and the batch reports back immediately with whatever did finish, instead of leaving you stuck watching "Calling…" with no way out.
+
 ## 1.0.22 — 2026-09-15
 
 - Eva can place real phone calls again, redesigned to actually work this time: a single [[DELEGATE:phone]] hand-off can now cover a whole list of calls (one number and purpose per line, no cap on how many), shown as one Approve card instead of forcing a separate approval per call. Approved calls run three at a time, get tracked to completion (or a 5-minute timeout each) against the real call status, and once every call in the batch is done, the results — including each call's recording link — flow back to Eva the same way a Research or Email report already does, so she can act on what the calls found instead of it being a dead end.
