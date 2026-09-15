@@ -2,6 +2,10 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.24 — 2026-09-15
+
+- Fixed a phone batch never actually placing a second call to the same number — a call is only really "in progress" if it's the sole thing dialing that line, so two calls to one number placed at the same time meant the second could never truly connect (confirmed live: it just sat unresolved). Calls to the same number now always run one after the other; calls to different numbers still run concurrently, so a real batch to several different offices isn't slowed down by this.
+
 ## 1.0.23 — 2026-09-15
 
 - Fixed Stop doing nothing during a phone batch — a stalled call (busy line, no answer) had no way to interrupt it short of waiting out the full 5-minute per-call timeout. Stop now actually cancels a running batch: any call still waiting is marked cancelled and the batch reports back immediately with whatever did finish, instead of leaving you stuck watching "Calling…" with no way out.

@@ -1383,16 +1383,42 @@ export const useChatStore = create<ChatState>()(
         };
 
         const total = batch.calls.length;
-        let nextIndex = 0;
+
+        // Never place two calls to the SAME destination number at once — a
+        // second simultaneous call to a line already in a call can't
+        // actually connect (confirmed live: it just sits unresolved until
+        // the timeout), it's not a real "call in progress," so grouping by
+        // number and running each group's calls in order (while still
+        // running DIFFERENT numbers concurrently, up to
+        // PHONE_BATCH_CONCURRENCY) fixes the busy-line case without
+        // slowing down the common real case of a batch to several
+        // different offices.
+        const normalizeNumber = (raw: string) => raw.replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
+        const groups = new Map<string, number[]>();
+        batch.calls.forEach((c, i) => {
+          const key = normalizeNumber(c.number);
+          const arr = groups.get(key);
+          if (arr) arr.push(i);
+          else groups.set(key, [i]);
+        });
+        const groupQueues = Array.from(groups.values());
+
+        let nextGroup = 0;
         const worker = async () => {
           for (;;) {
             if (signal.aborted) return;
-            const i = nextIndex++;
-            if (i >= total) return;
-            await placeOne(i);
+            const g = nextGroup++;
+            if (g >= groupQueues.length) return;
+            for (const i of groupQueues[g]) {
+              if (signal.aborted) {
+                updateCall(i, { status: "cancelled", error: "Cancelled before this call was placed." });
+                continue;
+              }
+              await placeOne(i);
+            }
           }
         };
-        await Promise.all(Array.from({ length: Math.min(PHONE_BATCH_CONCURRENCY, total) }, worker));
+        await Promise.all(Array.from({ length: Math.min(PHONE_BATCH_CONCURRENCY, groupQueues.length) }, worker));
 
         const finished = get().activePhoneBatch;
         if (!finished) return; // cleared mid-run — nothing left to report
