@@ -2,6 +2,11 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.22 — 2026-09-15
+
+- Eva can place real phone calls again, redesigned to actually work this time: a single [[DELEGATE:phone]] hand-off can now cover a whole list of calls (one number and purpose per line, no cap on how many), shown as one Approve card instead of forcing a separate approval per call. Approved calls run three at a time, get tracked to completion (or a 5-minute timeout each) against the real call status, and once every call in the batch is done, the results — including each call's recording link — flow back to Eva the same way a Research or Email report already does, so she can act on what the calls found instead of it being a dead end.
+- Fixed a real bug found while building the above: the app's own same-tab notification relay (`pushToast`) had no producers wired to it at all — a push arriving over the live notification stream was rendered directly instead of being relayed, so anything else in the app trying to listen for one never could.
+
 ## 1.0.21 — 2026-09-15
 
 - Fixed Research reporting a confidently wrong tax rate and commitment date for a town (Scarborough) even though the correct figures were right there on the page it cited as its source. Traced to the actual tool calls: Fast mode's quick search was returning a stale, months-old cached snapshot of the page, and the fetch-only fallback couldn't see the current data because it's rendered by JavaScript. Fast research now has the same live-browser tool Deep mode already has — it still moves fast and checks the same handful of sources, but loads an authoritative source directly instead of trusting a cached search snippet.

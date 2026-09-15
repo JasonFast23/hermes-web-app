@@ -144,6 +144,54 @@ export interface PendingDelegation {
   researchMode?: "fast" | "deep";
 }
 
+// One line of a [[DELEGATE:phone]] marker — see lib/agents.ts for the
+// "<number>|<purpose>" format. A batch is one or more of these placed
+// together under a single approval.
+export interface PhoneBatchCallSpec {
+  number: string;
+  purpose: string;
+}
+
+// A parsed [[DELEGATE:phone]] marker awaiting Approve/Decline — same idea
+// as PendingDelegation, but for one or more real calls instead of a text
+// hand-off. Only ever proposed by Eva (jarvis) — see the code-level guard
+// in processDelegateMarker, not just the prompt.
+export interface PendingPhoneBatch {
+  sessionId: string;
+  fromAgentId: AgentId;
+  calls: PhoneBatchCallSpec[];
+  hopsLeft: number;
+}
+
+// One call's progress once the batch has been approved and is actually
+// running. callId is null until the call is actually placed (it's set the
+// instant /api/phone/calls/create returns one) — placement itself can fail
+// before that ever happens, which "failed" without a callId covers.
+export interface PhoneBatchCallState extends PhoneBatchCallSpec {
+  callId: string | null;
+  status: "queued" | "calling" | "done" | "timeout" | "failed";
+  // Retell's own post-call analysis summary (call_analysis.call_summary),
+  // once available — this is what actually answers the call's <purpose>.
+  summary?: string;
+  // Retell's audio recording URL for the call, when available — every
+  // request that's asked for calls to be made has also asked for the
+  // recordings, so the batch report needs to actually carry this, not
+  // just the text summary.
+  recordingUrl?: string;
+  error?: string;
+}
+
+// The batch currently being placed/tracked — drives the in-progress banner
+// and is what runPhoneBatch mutates call-by-call as each one resolves.
+// Only one batch runs at a time, same single-flight assumption every other
+// delegation in this store already makes.
+export interface ActivePhoneBatch {
+  sessionId: string;
+  fromAgentId: AgentId;
+  calls: PhoneBatchCallState[];
+  hopsLeft: number;
+}
+
 // A message typed while its target agent was still streaming (or working
 // through a delegation), held here instead of being dropped — see
 // queueMessage. sessionId/agentId pin it to the tab it was written for so
@@ -205,6 +253,16 @@ interface ChatState {
   // when they thought they were still on Eva's tab). Never persisted —
   // only meaningful for a live run.
   activeDelegation: { sessionId: string; targetAgentId: AgentId; task: string } | null;
+  // A phone batch awaiting Approve/Decline — see PendingPhoneBatch. Never
+  // persisted, same reasoning as pendingDelegation.
+  pendingPhoneBatch: PendingPhoneBatch | null;
+  // The batch actually placing/tracking calls right now, if any — see
+  // ActivePhoneBatch. Drives the in-progress card the same way
+  // activeDelegation does for a text delegation. Never persisted; a reload
+  // mid-batch loses live progress tracking (the calls themselves keep
+  // running on Retell regardless — only this app's view of them would need
+  // reconstructing, which isn't attempted here).
+  activePhoneBatch: ActivePhoneBatch | null;
   // Messages submitted while isStreaming was already true for that
   // session/agent — sent automatically once that run finishes (see
   // drainMessageQueue) instead of being blocked with no way to submit
@@ -323,6 +381,12 @@ interface ChatState {
   ) => Promise<string>;
   approveDelegation: (onDelta?: (chunk: string) => void) => Promise<void>;
   declineDelegation: () => void;
+  // Places every call in the pending batch (bounded concurrency, no cap on
+  // batch size — see runPhoneBatch), tracks each to completion or timeout,
+  // then gives Eva a fresh turn with the compiled results the same way a
+  // text delegation's report does.
+  approvePhoneBatch: () => Promise<void>;
+  declinePhoneBatch: () => void;
   setPendingPhoneCallToOpen: (callId: string | null) => void;
   // Stale-while-revalidate: a no-op if a fetch is already in flight, or if
   // the cache is younger than PHONE_CALLS_STALE_MS and opts.force isn't
@@ -368,10 +432,50 @@ const DELEGATE_TARGETS: Record<string, AgentId> = {
 // RESEARCH_DEEP_MODE_CONTEXT. No suffix defaults to fast (processDelegateMarker),
 // matching "quick answer by default, offer to go deeper" rather than the
 // old always-unrestricted delegation behavior.
-// Phone is deliberately not a delegate target — Eva can't propose a real
-// call at all (see her system prompt); only "email" and "research" ever
-// match here.
-const DELEGATE_MARKER = /^\[\[DELEGATE:(email|research)(?::(fast|deep))?\]\][ \t]*([\s\S]*)$/m;
+// Phone is deliberately not a DELEGATE_TARGETS entry — a phone marker
+// never becomes a PendingDelegation. It's parsed and approved through its
+// own PendingPhoneBatch/ActivePhoneBatch path instead (see
+// processDelegateMarker and runPhoneBatch below), since approving it means
+// placing one or more real calls, not sending a text turn to another
+// agent's thread.
+const DELEGATE_MARKER = /^\[\[DELEGATE:(email|research|phone)(?::(fast|deep))?\]\][ \t]*([\s\S]*)$/m;
+
+// Parses one line of a [[DELEGATE:phone]] marker's body — "<number>|<purpose>"
+// (see lib/agents.ts). Same permissive number formatting as before
+// (spaces, dashes, parens, a leading +1 or not — normalized server-side in
+// /api/phone/calls/create, which is also where an actually-invalid number
+// gets rejected). Applied per line, not to the whole marker body, so one
+// malformed line doesn't take the rest of a valid batch down with it.
+const PHONE_CALL_LINE_PATTERN = /^([+()\-\s\d]{7,})\|(.+)$/;
+
+// A small standalone copy of PhoneView's formatPhoneNumber — this module
+// can't import from a component file, and a batch report is the only
+// place here that needs to turn a raw number back into something readable.
+function formatPhoneNumberLocal(raw: string): string {
+  // Unlike PhoneView's copy (which formats an already-normalized E.164
+  // number from Retell), this one may see whatever loose format the model
+  // wrote in the marker — strip everything but digits first.
+  const digits = raw.replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
+  const match = digits.match(/^(\d{3})(\d{3})(\d{4})$/);
+  return match ? `(${match[1]}) ${match[2]}-${match[3]}` : raw;
+}
+
+// Bounded concurrency for placing a batch's calls — fast enough that a
+// 9-call batch finishes in roughly a third the time of doing them one at a
+// time, without dialing every number in the batch simultaneously.
+const PHONE_BATCH_CONCURRENCY = 3;
+
+// How long to wait for a single call's post-call analysis before giving up
+// on it and moving on with whatever the rest of the batch produced — long
+// enough for hold music/IVR at a small office, short enough that one dead
+// line doesn't stall the whole batch indefinitely.
+const PHONE_BATCH_CALL_TIMEOUT_MS = 5 * 60 * 1000;
+
+// How often to re-check an in-flight call's status while polling for its
+// analysis (see runPhoneBatch's pollUntilDone) — frequent enough that a
+// quick call's result shows up promptly, infrequent enough not to hammer
+// the Retell API across several concurrent calls at once.
+const PHONE_BATCH_POLL_MS = 15_000;
 
 // Caps how many delegate -> Eva-reacts -> delegate-again cycles a single
 // turn can chain through, so a model that keeps re-delegating can't loop
@@ -970,6 +1074,41 @@ export const useChatStore = create<ChatState>()(
           return fallback;
         }
 
+        if (match[1] === "phone") {
+          // Only Eva places real phone calls — a code-level guard, not
+          // just the prompt telling Research/Email not to reach for it
+          // (same reasoning as the old single-call marker had).
+          if (agentId !== "jarvis") {
+            const fallback = strippedText || "(tried to place a call it isn't allowed to make)";
+            applyStrip(fallback);
+            return fallback;
+          }
+
+          const calls: PhoneBatchCallSpec[] = [];
+          for (const line of rawTask.split("\n")) {
+            const trimmedLine = line.trim();
+            if (!trimmedLine) continue;
+            const lineMatch = PHONE_CALL_LINE_PATTERN.exec(trimmedLine);
+            // A line that doesn't parse is simply skipped — one malformed
+            // line (a stray blank, a mis-typed separator) shouldn't sink
+            // an otherwise-valid batch of real calls. If nothing at all
+            // parsed, that's the empty-batch fallback below.
+            if (lineMatch) calls.push({ number: lineMatch[1].trim(), purpose: lineMatch[2].trim() });
+          }
+
+          if (calls.length === 0) {
+            const fallback =
+              "I tried to propose a call but couldn't format it as a " +
+              "number and purpose — let me know which number to try.";
+            applyStrip(fallback);
+            return fallback;
+          }
+
+          applyStrip();
+          set({ pendingPhoneBatch: { sessionId, fromAgentId: agentId, calls, hopsLeft } });
+          return strippedText;
+        }
+
         const target = DELEGATE_TARGETS[match[1]];
         // Eva's own delegation never runs deep research — that's reserved
         // for the user's manual Fast/Deep toggle on the Research tab (see
@@ -1117,6 +1256,130 @@ export const useChatStore = create<ChatState>()(
         void get().sendMessage(next.text);
       };
 
+      // Runs the currently-pending phone batch to completion: places every
+      // call (PHONE_BATCH_CONCURRENCY at a time, no cap on how many total),
+      // polls each until its post-call analysis is ready or
+      // PHONE_BATCH_CALL_TIMEOUT_MS elapses, then compiles one report
+      // covering every call and feeds it back through recordAgentActivity +
+      // runEvaAfterDelegation — the same path a text delegation's report
+      // already takes, which is what makes phone calls chainable into a
+      // larger task (e.g. Email filling a workbook from what the calls
+      // turned up) instead of a dead end with no way back into the
+      // conversation.
+      //
+      // Polls rather than waiting on the phone bridge's Retell webhook
+      // push (see lib/notifications.ts/app/api/notify) deliberately: that
+      // push only fires when Retell's analysis sets
+      // custom_analysis_data.priscilla_follow_up (see
+      // hermes-phone-bridge/server.js's handleWebhook) — i.e. only for a
+      // call that needs a HUMAN to intervene, not for an ordinary
+      // information-gathering call completing cleanly, which is the
+      // common case here. Polling this app's own /api/phone/calls/[callId]
+      // works for every call regardless of that flag, and doesn't depend
+      // on a notification path scoped for a different purpose.
+      const runPhoneBatch = async () => {
+        const batch = get().activePhoneBatch;
+        if (!batch) return;
+
+        const updateCall = (index: number, patch: Partial<PhoneBatchCallState>) => {
+          set((s) => {
+            if (!s.activePhoneBatch) return s;
+            const calls = s.activePhoneBatch.calls.map((c, i) => (i === index ? { ...c, ...patch } : c));
+            return { activePhoneBatch: { ...s.activePhoneBatch, calls } };
+          });
+        };
+
+        // Polls this call's detail every PHONE_BATCH_POLL_MS until its
+        // analysis is ready, the call itself reports a terminal error
+        // status, or PHONE_BATCH_CALL_TIMEOUT_MS elapses — whichever comes
+        // first. Returns the last detail fetched (possibly null/incomplete
+        // on a timeout) rather than throwing, since a stalled call is a
+        // per-call outcome to report, not a batch-ending failure.
+        const pollUntilDone = async (
+          callId: string
+        ): Promise<{ status: "done" | "timeout"; summary?: string; recordingUrl?: string }> => {
+          const deadline = Date.now() + PHONE_BATCH_CALL_TIMEOUT_MS;
+          for (;;) {
+            const detail = await fetch(`/api/phone/calls/${callId}`)
+              .then((r) => r.json())
+              .catch(() => null);
+            const summary: string | undefined = detail?.call_analysis?.call_summary;
+            if (summary) return { status: "done", summary, recordingUrl: detail?.recording_url };
+            if (detail?.call_status === "error") return { status: "timeout" };
+            if (Date.now() >= deadline) return { status: "timeout" };
+            await new Promise((r) => setTimeout(r, PHONE_BATCH_POLL_MS));
+          }
+        };
+
+        const placeOne = async (index: number) => {
+          const call = get().activePhoneBatch?.calls[index];
+          if (!call) return;
+          updateCall(index, { status: "calling" });
+
+          let callId: string;
+          try {
+            const res = await fetch("/api/phone/calls/create", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ number: call.number, purpose: call.purpose }),
+            });
+            const data = await res.json().catch(() => null);
+            if (!res.ok || !data?.callId) {
+              updateCall(index, { status: "failed", error: data?.error || "Failed to place the call" });
+              return;
+            }
+            callId = data.callId;
+          } catch (err) {
+            updateCall(index, { status: "failed", error: err instanceof Error ? err.message : "Request failed" });
+            return;
+          }
+
+          updateCall(index, { callId });
+          const result = await pollUntilDone(callId);
+          // Bails quietly if the batch was cleared out from under this
+          // call while it was polling (e.g. the user switched sessions).
+          if (get().activePhoneBatch?.calls[index]?.callId !== callId) return;
+
+          if (result.status === "done") {
+            updateCall(index, { status: "done", summary: result.summary, recordingUrl: result.recordingUrl });
+          } else {
+            updateCall(index, { status: "timeout", error: "No result came back for this call in time." });
+          }
+        };
+
+        const total = batch.calls.length;
+        let nextIndex = 0;
+        const worker = async () => {
+          for (;;) {
+            const i = nextIndex++;
+            if (i >= total) return;
+            await placeOne(i);
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(PHONE_BATCH_CONCURRENCY, total) }, worker));
+
+        const finished = get().activePhoneBatch;
+        if (!finished) return; // cleared mid-run — nothing left to report
+
+        const report =
+          `Placed ${total} call${total === 1 ? "" : "s"}:\n\n` +
+          finished.calls
+            .map((c) => {
+              const label = `${formatPhoneNumberLocal(c.number)} — ${c.purpose}`;
+              if (c.status === "done") {
+                const recording = c.recordingUrl ? `\nRecording: ${c.recordingUrl}` : "";
+                return `${label}\nResult: ${c.summary}${recording}`;
+              }
+              if (c.status === "failed") return `${label}\nCould not be placed: ${c.error ?? "unknown error"}`;
+              return `${label}\n${c.error ?? "No result came back in time."}`;
+            })
+            .join("\n\n");
+
+        recordAgentActivity(finished.sessionId, "phone", report);
+        set({ activePhoneBatch: null });
+        await runEvaAfterDelegation(finished.sessionId, undefined, finished.hopsLeft, undefined, "phone");
+      };
+
       return {
         activeAgentId: DEFAULT_AGENT_ID,
         activeSessionId: null,
@@ -1125,6 +1388,8 @@ export const useChatStore = create<ChatState>()(
         activeAbortController: null,
         pendingDelegation: null,
         activeDelegation: null,
+        pendingPhoneBatch: null,
+        activePhoneBatch: null,
         messageQueue: [],
         pendingUploads: [],
         scrollToMessage: null,
@@ -1193,6 +1458,7 @@ export const useChatStore = create<ChatState>()(
             activeAgentId: DEFAULT_AGENT_ID,
             view: "chat",
             pendingDelegation: null,
+            pendingPhoneBatch: null,
             scrollToMessage: null,
             researchFastMode: true,
           });
@@ -1203,7 +1469,11 @@ export const useChatStore = create<ChatState>()(
           // A pending approval (or search-result scroll target) belongs to
           // the session that raised it — don't let it linger and fire out
           // of context after switching. Same for researchFastMode: see
-          // startNewSession's comment just above.
+          // startNewSession's comment just above. An already-RUNNING phone
+          // batch (activePhoneBatch) is deliberately left alone here, same
+          // as activeDelegation already is — the calls are real and
+          // already placed; navigating away shouldn't abandon tracking
+          // them or lose the report once they finish.
           // Just opening a session does NOT bump lastActiveAt — only actual
           // new activity in it does (see appendMessages). Reordering the
           // list on open as well made it reshuffle under the user's cursor
@@ -1213,6 +1483,7 @@ export const useChatStore = create<ChatState>()(
             activeSessionId: sessionId,
             view: "chat",
             pendingDelegation: null,
+            pendingPhoneBatch: null,
             scrollToMessage: null,
             researchFastMode: true,
           });
@@ -1233,6 +1504,7 @@ export const useChatStore = create<ChatState>()(
             activeAgentId: agentId,
             view: "chat",
             pendingDelegation: null,
+            pendingPhoneBatch: null,
             scrollToMessage: { messageId, query },
           });
         },
@@ -1359,6 +1631,34 @@ export const useChatStore = create<ChatState>()(
         },
 
         declineDelegation: () => set({ pendingDelegation: null }),
+
+        // Mirrors approveDelegation: isStreaming stays true for the whole
+        // run (placing every call, waiting on each, then Eva's reaction —
+        // see runPhoneBatch), not just the initial approval, for the same
+        // reason — a message sent to Eva mid-batch queues instead of
+        // racing runEvaAfterDelegation's own turn against it.
+        approvePhoneBatch: async () => {
+          const pending = get().pendingPhoneBatch;
+          if (!pending) return;
+          set({
+            pendingPhoneBatch: null,
+            isStreaming: true,
+            activePhoneBatch: {
+              sessionId: pending.sessionId,
+              fromAgentId: pending.fromAgentId,
+              hopsLeft: pending.hopsLeft,
+              calls: pending.calls.map((c) => ({ ...c, callId: null, status: "queued" as const })),
+            },
+          });
+          try {
+            await runPhoneBatch();
+          } finally {
+            set({ isStreaming: false, activePhoneBatch: null });
+            drainMessageQueue();
+          }
+        },
+
+        declinePhoneBatch: () => set({ pendingPhoneBatch: null }),
 
         voiceApproveDelegation: null,
         setVoiceApproveDelegation: (fn) => set({ voiceApproveDelegation: fn }),

@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { useChatStore } from "@/lib/store";
-import { isNotificationsMuted, subscribeToasts, type ToastPayload } from "@/lib/notifications";
+import { pushToast, subscribeToasts, type ToastPayload } from "@/lib/notifications";
 
 // Agent summaries lead with a bolded "**key fact**" (see the agents'
 // system prompts in lib/agents.ts) — render that as actual bold instead of
@@ -56,19 +56,25 @@ export function NotificationListener() {
 
   useEffect(() => {
     const source = new EventSource("/api/notify");
+    // Relayed through pushToast (which already checks the mute flag)
+    // rather than calling addToast directly, so anything else in the app
+    // subscribed via subscribeToasts also sees a push that arrived over
+    // SSE — not just same-tab ones. The phone-batch tracker in
+    // lib/store.ts is exactly this: it needs to know the instant a call's
+    // post-call analysis is ready (this same SSE push, from the phone
+    // bridge's Retell webhook), and previously had no way to, since
+    // nothing relayed an SSE event into subscribeToasts at all.
     source.onmessage = (event) => {
-      if (isNotificationsMuted()) return;
       try {
-        addToast(JSON.parse(event.data) as ToastPayload);
+        pushToast(JSON.parse(event.data) as ToastPayload);
       } catch {
         // Ignore malformed push payloads.
       }
     };
     return () => source.close();
-  }, [addToast]);
+  }, []);
 
-  // Same-tab pushes — e.g. a delegation completing in lib/store.ts — skip
-  // the SSE round trip and land here directly.
+  // Same-tab pushes, plus SSE pushes relayed through pushToast above.
   useEffect(() => subscribeToasts(addToast), [addToast]);
 
   const handleClick = (t: Toast) => {
