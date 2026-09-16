@@ -2,6 +2,10 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.34 — 2026-09-16
+
+- Found why a button press might never have actually reached Retell on any real call so far: pulled a call's full tool-call record (Retell's own authoritative log of what it actually executed, separate from the transcript) and confirmed zero press_digit events ever fired, while 5 straight reply turns were silently discarded mid-call. Root cause: a long IVR menu's own internal pauses between options fire a new turn every few seconds, and each new turn aborts whatever Eva was still generating for the previous one — so even if she'd decided to press a digit, that decision could get thrown away before it finished streaming out. Fixed by sending the press/hangup decision to Retell the instant it's parsed from her reply, not after the whole reply finishes — closing the window where an abort could eat it.
+
 ## 1.0.33 — 2026-09-16
 
 - Reverted the previous version's NO_RESPONSE_NEEDED fix — it was wrong. Confirmed against a real call's word-level timing that Retell spoke the literal text "NO_RESPONSE_NEEDED" out loud as real audio instead of silently suppressing it as documented, and the automated system on the other end responded "Your call cannot be transferred" and hung up. That assumption was based on a summarized reading of Retell's docs that turned out not to hold for this integration, and it shipped to a real paid call before being verified against actual call behavior. Back to always replying to every menu turn for now.
