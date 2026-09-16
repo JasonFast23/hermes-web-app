@@ -15,7 +15,7 @@
 // right after creating the store to apply remote updates via setState.
 import type { StateStorage } from "zustand/middleware";
 import type { AgentId } from "./agents";
-import type { ChatSession, ChatMessage, CallSummary, FeedbackItem } from "./store";
+import type { AttachedFile, ChatSession, ChatMessage, CallSummary, FeedbackItem } from "./store";
 import { getDeletedIds } from "./sync-tombstones";
 import { BUILD_ID } from "./build-id";
 
@@ -161,6 +161,21 @@ function mergeMessages(a: ChatMessage[], b: ChatMessage[]): ChatMessage[] {
   return order.map((id) => byId.get(id)!);
 }
 
+// Union by id, same idea as mergeMessages/mergeFeedbackItems — a file
+// attached on one side must survive a merge against a snapshot from the
+// other side that predates it, not just get silently dropped because the
+// merged object never carried the field through (see git history for the
+// bug this was: a routine sync merge — which runs on every page load via
+// runInitialSync's catch-up, and on every SSE-triggered reconcile — wiped
+// attachedFiles from the session before the next turn's buildFileContext
+// ever read it, even on the same device that had just attached the file).
+function mergeAttachedFiles(a: AttachedFile[] = [], b: AttachedFile[] = []): AttachedFile[] {
+  const byId = new Map<string, AttachedFile>();
+  for (const f of a) byId.set(f.id, f);
+  for (const f of b) byId.set(f.id, f);
+  return Array.from(byId.values()).sort((x, y) => x.uploadedAt - y.uploadedAt);
+}
+
 function mergeSession(a: ChatSession, b: ChatSession): ChatSession {
   const agentIds = new Set<AgentId>([
     ...(Object.keys(a.threads) as AgentId[]),
@@ -174,8 +189,10 @@ function mergeSession(a: ChatSession, b: ChatSession): ChatSession {
     id: a.id,
     title: a.title !== "New session" ? a.title : b.title,
     createdAt: Math.min(a.createdAt, b.createdAt),
+    lastActiveAt: Math.max(a.lastActiveAt ?? 0, b.lastActiveAt ?? 0) || undefined,
     threads,
     agentActivity: a.agentActivity.length >= b.agentActivity.length ? a.agentActivity : b.agentActivity,
+    attachedFiles: mergeAttachedFiles(a.attachedFiles, b.attachedFiles),
   };
 }
 
