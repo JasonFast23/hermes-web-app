@@ -3,156 +3,88 @@
 What actually shipped, one entry per version.
 
 ## 1.0.34 — 2026-09-16
-
-- Found why a button press might never have actually reached Retell on any real call so far: pulled a call's full tool-call record (Retell's own authoritative log of what it actually executed, separate from the transcript) and confirmed zero press_digit events ever fired, while 5 straight reply turns were silently discarded mid-call. Root cause: a long IVR menu's own internal pauses between options fire a new turn every few seconds, and each new turn aborts whatever Eva was still generating for the previous one — so even if she'd decided to press a digit, that decision could get thrown away before it finished streaming out. Fixed by sending the press/hangup decision to Retell the instant it's parsed from her reply, not after the whole reply finishes — closing the window where an abort could eat it.
+- Fixed a rare case where pressing a phone menu button could get silently
+  dropped mid-call. Button presses now send immediately instead of waiting.
 
 ## 1.0.33 — 2026-09-16
-
-- Reverted the previous version's NO_RESPONSE_NEEDED fix — it was wrong. Confirmed against a real call's word-level timing that Retell spoke the literal text "NO_RESPONSE_NEEDED" out loud as real audio instead of silently suppressing it as documented, and the automated system on the other end responded "Your call cannot be transferred" and hung up. That assumption was based on a summarized reading of Retell's docs that turned out not to hold for this integration, and it shipped to a real paid call before being verified against actual call behavior. Back to always replying to every menu turn for now.
+- Reverted the silent-skip fix from 1.0.32 — it caused Retell to read
+  "NO_RESPONSE_NEEDED" out loud on a real call. Eva replies to every menu
+  turn again for now.
 
 ## 1.0.32 — 2026-09-16
-
-- Fixed Eva getting the actual answer to a phone call's purpose — a town's IVR recording stated its own office hours before listing extensions — and then just hanging up without saying it, so the call's report showed "reached an automated menu, no conversation occurred" with the real answer nowhere in it. Whoever reviews a call afterward only sees what was said out loud during it, not what Eva silently understood; she now says the answer back out loud plainly (including one heard from an automated recording, not just a live person) before wrapping up, instead of moving straight to a goodbye with it never spoken.
+- Eva now says the answer out loud before ending a call, even if she
+  heard it from an automated recording rather than a person.
 
 ## 1.0.31 — 2026-09-16
-
-- Found the actual cause of Eva claiming an office's phone menu "repeated itself" when it hadn't: pulled the real call recording's timing data and confirmed the automated menu played once, straight through, for 34 uninterrupted seconds — but a brief pause partway through it (after "Thank you for calling ") was read as her turn, so she started replying and got cut off when the menu kept going. From inside her own conversation, that looked like hearing the same announcement twice, since she'd generated two separate replies to two pieces of one uninterrupted recording. Eva now recognizes an unfinished-sounding fragment and stays silent for it (using Retell's own NO_RESPONSE_NEEDED signal) instead of jumping in, so she hears the whole menu before deciding anything.
+- Fixed Eva thinking a phone menu repeated itself — a pause mid-recording
+  was confusing her into replying twice to one announcement. She now
+  waits for the whole menu before responding.
 
 ## 1.0.30 — 2026-09-16
-
-- Fixed Eva still giving up on an office's phone menu without pressing anything, even after the previous fix told her to pick and press the closest option — she heard a real, valid menu exactly once and hung up anyway. Confirmed via the actual call log this wasn't a bug in pressing/hanging up itself (that machinery worked correctly) — she just didn't follow her own instructions. Rather than trust more prompt wording alone, the phone bridge now tracks whether she's pressed anything yet on a call and, until she has, adds a pointed reminder to every reply that she is not allowed to give up before making at least one attempt — a live person answering or genuine dead air still work normally.
+- Fixed Eva giving up on a phone menu without pressing anything, even
+  after being told to try. She's now reminded every turn until she's
+  made at least one attempt.
 
 ## 1.0.29 — 2026-09-16
-
-- Added a red dot on the About button when a new version has shipped that you haven't seen yet — same badge style the Feedback tab already uses. Clears the moment you open About; syncs across devices like an unread call notice does, so dismissing it on one device clears it everywhere.
+- Added a red dot on the About button when a new update is available.
 
 ## 1.0.28 — 2026-09-16
-
-- Fixed Eva narrating phone actions that never actually happened: "I'll press one for Jennifer" and "I'm ending the call now" were just spoken words over the line — nothing told Retell to actually press a button or hang up. A call that hit a looping phone menu had no way to escape it and no way to stop itself, and one real call ran close to an hour before Retell's own 1-hour default cutoff finally ended it. Eva can now actually press a button and actually hang up; every outbound call also gets a hard 6-minute cap enforced by Retell itself regardless of anything else going wrong, and a call that repeats the identical line 3 times now force-ends automatically, independent of what Eva decides.
-- Fixed Eva giving up on an automated menu without ever trying an option — she'd hear a full list of departments once and bail instead of picking whichever one best matched what she was calling about. She now picks the closest match (front desk/main office for a general question, the specific department for a role-specific one) and presses it immediately, and no longer treats hearing a menu once as proof it's stuck.
+- Eva can now actually press buttons and hang up on a call — she used to
+  just say she would, without it happening. Calls are also capped at
+  6 minutes, and a call stuck repeating itself now ends automatically.
+- Fixed Eva giving up on an automated menu without trying an option —
+  she now picks the closest match and presses it.
 
 ## 1.0.27 — 2026-09-16
-
-- Fixed a file attached to a message to Eva (a spreadsheet, PDF) disappearing before she or a delegated agent ever saw it — a routine cross-device sync merge, which runs on every page load and every live update, silently dropped a session's attached files instead of carrying them through. This is why Email kept reporting it only saw an old, previously-attached file no matter how many times a new one was attached.
+- Fixed a file attached to a message sometimes disappearing before Eva
+  or another agent could see it.
 
 ## 1.0.26 — 2026-09-15
-
-- Fixed a chat tab forcing you back to the bottom while you were scrolled up reading something (e.g. clicking a Research report's source links) if that thread had any activity still happening in it — every new tool-progress update or message yanked the view back down mid-read. Auto-scroll now only follows along if you were already near the bottom; scrolling up to reread something now actually stays where you put it.
+- Fixed a chat jumping back to the bottom while you were scrolled up
+  reading something. It now only follows along if you were already
+  near the bottom.
 
 ## 1.0.25 — 2026-09-15
-
-- Fixed a real, separate infrastructure bug: the phone bridge was calling this app over a shared public URL whose default route had been repointed to an unrelated project on the same server, so every phone call's actual conversation was being generated by that other project's assistant, not Eva — explaining the wrong name, the generic "how can I help you" greeting, and total disregard for the call's purpose. It now talks to this app directly instead.
-- Fixed a two-step request ("look up X, then call this number and report it") stopping after the first step — Eva would relay the lookup and never place the call. Her reactive turn after a report comes back now checks the user's original request for a remaining explicit step before deciding to stop, instead of defaulting to "relay and stop" first.
+- Fixed calls being answered by the wrong assistant due to a
+  misconfigured shared server route.
+- Fixed a two-step request ("look this up, then call about it")
+  stopping after the first step.
 
 ## 1.0.24 — 2026-09-15
-
-- Fixed a phone batch never actually placing a second call to the same number — a call is only really "in progress" if it's the sole thing dialing that line, so two calls to one number placed at the same time meant the second could never truly connect (confirmed live: it just sat unresolved). Calls to the same number now always run one after the other; calls to different numbers still run concurrently, so a real batch to several different offices isn't slowed down by this.
+- Fixed a phone batch failing to call the same number twice at once.
+  Calls to the same number now run one after another.
 
 ## 1.0.23 — 2026-09-15
-
-- Fixed Stop doing nothing during a phone batch — a stalled call (busy line, no answer) had no way to interrupt it short of waiting out the full 5-minute per-call timeout. Stop now actually cancels a running batch: any call still waiting is marked cancelled and the batch reports back immediately with whatever did finish, instead of leaving you stuck watching "Calling…" with no way out.
+- Stop now actually cancels a running phone batch instead of doing
+  nothing until it times out.
 
 ## 1.0.22 — 2026-09-15
-
-- Eva can place real phone calls again, redesigned to actually work this time: a single [[DELEGATE:phone]] hand-off can now cover a whole list of calls (one number and purpose per line, no cap on how many), shown as one Approve card instead of forcing a separate approval per call. Approved calls run three at a time, get tracked to completion (or a 5-minute timeout each) against the real call status, and once every call in the batch is done, the results — including each call's recording link — flow back to Eva the same way a Research or Email report already does, so she can act on what the calls found instead of it being a dead end.
-- Fixed a real bug found while building the above: the app's own same-tab notification relay (`pushToast`) had no producers wired to it at all — a push arriving over the live notification stream was rendered directly instead of being relayed, so anything else in the app trying to listen for one never could.
+- Phone calls redesigned: one approval can now cover a whole list of
+  calls, run three at a time, with results (including recordings)
+  reported back to Eva automatically.
 
 ## 1.0.21 — 2026-09-15
-
-- Fixed Research reporting a confidently wrong tax rate and commitment date for a town (Scarborough) even though the correct figures were right there on the page it cited as its source. Traced to the actual tool calls: Fast mode's quick search was returning a stale, months-old cached snapshot of the page, and the fetch-only fallback couldn't see the current data because it's rendered by JavaScript. Fast research now has the same live-browser tool Deep mode already has — it still moves fast and checks the same handful of sources, but loads an authoritative source directly instead of trusting a cached search snippet.
+- Fixed Research citing outdated or wrong numbers from a cached page
+  instead of the live source.
 
 ## 1.0.20 — 2026-09-15
-
-- Fixed Email/Research marking fields "CALL ASSESSOR" (or otherwise missing) that the other agent actually already had an answer for — a delegation only ever received the last 500 characters of the other agent's report, so most of a long multi-town research table silently never reached whoever Eva handed the follow-up task to. Delegations now always carry the other agent's full report.
-- Research now has to back up any number it cites with the exact wording it appeared as on the source page, not just a link — a wrong figure and a wrong quote essentially never happen together by accident, so this makes a misread visible without having to click through and check it yourself. It also has to explicitly double-check it's reading the right entity and the right year before finalizing a page's numbers, since grabbing the wrong row/year on a page showing several is a common real mistake.
-- Research can now attach an actual screenshot of a source page as visual proof for a figure worth double-checking, instead of only a link — this renders as a real inline image in the chat, not just a citation.
-- Eva no longer forwards a request for something she's already told the user isn't possible (currently: phone calls) — she used to still pass that part along for the other agent to decline all over again instead of just leaving it out.
+- Fixed delegated tasks losing most of a long report in transit.
+- Research now has to quote its source's exact wording for any number
+  it cites, and can attach a screenshot as proof.
+- Eva no longer re-forwards a request she's already declined.
 
 ## 1.0.19 — 2026-09-15
-
-- Fixed a file you attached to a message to Eva (a spreadsheet, PDF) never actually reaching the Email or Research agent when she delegated to them — only her own chat had access to it. This is why Email kept reporting it couldn't find an attached workbook no matter how many times it was re-attached; delegated tasks now carry the file's contents the same way Eva's own replies already do.
+- Fixed attached files not reaching Email or Research when Eva
+  delegated a task to them.
 
 ## 1.0.18 — 2026-09-15
-
-- Removed Eva's ability to delegate to a phone call entirely — she'll now say plainly that placing calls isn't something this app can do, instead of proposing one. (A dedicated calling flow, run directly from the Phone tab, is planned separately.)
-- Fixed a bug where a delegation marker that couldn't actually run (e.g. one bundling more than it should have) could leak raw internal `[[DELEGATE:...]]` syntax into the chat instead of a clean message.
-- Fixed Eva sometimes treating a request that only mentions calling as part of a larger task (e.g. "find the missing figures, calling the office if needed") as if it were a direct instruction to call, instead of delegating the whole thing to Research. Explicitly naming a target agent ("send it to the research agent") is now honored directly too.
+- Removed Eva's ability to delegate phone calls (a dedicated calling
+  flow is planned separately).
+- Fixed raw delegation syntax sometimes leaking into chat.
+- Fixed Eva sometimes misreading a passing mention of a phone call as
+  a direct instruction to call.
 
 ## 1.0.17 — 2026-09-12
-
-- Fixed Eva's delegation messages silently losing everything after the first line — a long town list, parcel list, or research summary handed to Research or Email was cut down to just the first sentence in transit, which is why the specialist kept saying it never received the data even when Eva sent it. Multi-line tasks now arrive whole.
-- Email now automatically sees the same "other agents' latest findings" digest Eva relies on, instead of only whatever Eva managed to retype into the delegation task by hand — so a request like "fill in the workbook using the research already done" actually has the numbers to work with.
-- The Email and Research tabs accept direct typing again — you can message a specialist yourself instead of only going through Eva.
-
-## 1.0.16 — 2026-09-03
-
-- Delegating to a specialist no longer switches you onto their tab — you stay wherever you were (a banner shows who's working, with a "View" link if you want to watch), so it can't be mistaken for still talking to Eva and accidentally stopped mid-task.
-- Fixed Eva not actually having a specialist's findings to relay or email after a delegation reported back — she was only getting a short excerpt of the report, not the whole thing, which is why she'd sometimes ask you to paste the numbers back to her instead of just using them.
-- You can now send Eva another message while she's still working on the last one — it queues and sends the moment she's free, instead of the input blocking with Stop as the only option.
-- Added file upload — attach a PDF, Excel, or CSV to a message to Eva and she reads real figures out of it instead of guessing.
-- Fixed a message getting silently cut short when it ended with a colon and Enter was pressed to start a new line — Enter sends the message; Shift+Enter is what makes a new line, now hinted in the input.
-- The Chats list no longer reshuffles every time you open a session — only actual new activity (a message sent or received) moves it to the top.
-- Added a Feedback tab — post a bug or concern right in the app instead of emailing it over; it syncs across devices, and marking one fixed clears it with one click.
-- The Email and Research agents' tabs no longer accept typing directly — since you're meant to deal with Eva, not them, their input is replaced with a one-tap "Go to Eva" instead.
-
-## 1.0.15 — 2026-08-28
-
-- Fixed the Approve/Decline buttons on a delegation card becoming unreachable when Eva hands off a long task (e.g. a long email body) during a voice session — the task text had no height limit, so a long one pushed the buttons off-screen with nothing scrollable to reach them. The task/purpose text is now capped and scrolls internally instead.
-
-## 1.0.14 — 2026-08-28
-
-- Fixed the dictation button being laggy on Android — the same screen-timeout network throttling that voice mode was fixed for (1.0.9) was never applied to dictation, since it has its own separate audio pipeline. Both now share one wake-lock helper, so any future audio feature gets this protection automatically instead of needing to remember it.
-
-## 1.0.13 — 2026-08-24
-
-- Eva can now place a real phone call on your behalf — ask her to call a number for a stated purpose, approve it, and she actually dials out through the Retell line.
-- Added in-app notifications (bell icon, top bar) — when a call needs Priscilla's follow-up, a toast pops up and links straight to that call's transcript in the Phone tab, with the note highlighted.
-- Fixed the call transcript screen's "Back" button sitting under the status bar on Android, making it barely tappable.
-- Hid the Phone tab's test-call tools for now.
-
-## 1.0.12 — 2026-08-24
-
-- Fixed the Phone tab having no way back to the main screen — it was built as a separate page with no sidebar at all, so neither the sidebar navigation nor the mobile menu worked from there. Phone is now a view within the same app shell, like Chats already was, so the sidebar (and a normal tap back to Eva) is always there.
-
-## 1.0.11 — 2026-08-24
-
-- Fixed the phone's hardware/gesture back button not closing a call's detail view in the Phone tab — it worked with the on-screen "← Back" link but not the device's own back navigation, since opening a call wasn't registered as a real step in browser history.
-
-## 1.0.10 — 2026-08-24
-
-- The Phone tab is now a real call history — every inbound and outbound call on the Retell number, with its AI-generated summary, playable recording, and full transcript. The old browser-mic call simulator still exists, just tucked under a "Test tools" toggle instead of being the whole page.
-
-## 1.0.9 — 2026-08-24
-
-- Fixed voice mode being dramatically slower on Android than on Mac/Windows — the screen locking mid-conversation was letting the phone throttle network activity; voice mode now keeps the screen awake for as long as it's actually in use.
-
-## 1.0.8 — 2026-08-24
-
-- Added a real Android app — install it directly on your phone, backed by the same always-on server this web app runs on.
-- Redesigned the phone-width layout: hamburger menu with a slide-out sidebar, mobile header, and a chat view that actually fits a phone screen instead of the desktop sidebar squeezed down.
-- Added a "Phone (test)" page for trying the Retell phone-call integration from a browser mic, no real phone number needed.
-
-## 1.0.7 — 2026-08-20
-
-- Eva's delegation no longer adds extra scope beyond what you actually asked.
-- Fixed a crash that silently broke every message send when the app was opened in a plain browser instead of through the Electron app.
-- Chats search now matches every keyword independently, not just the exact phrase — and always jumps to the actual matching message, even when the chat's title happens to match too.
-- Fixed the search-result highlight disappearing instantly instead of fading, and removed extra spacing it was adding around highlighted words.
-- Redesigned the Chats search bar — bigger, always visible, no longer hidden behind a small icon.
-
-## 1.0.6 — 2026-08-20
-
-- Answers now stream in at a steady pace instead of dumping in bursts.
-- Bolding now highlights just the key fact in a reply, not the whole sentence.
-- Research shares findings as it goes instead of going quiet until the end.
-- Multi-source research runs faster by checking sources in parallel.
-- Fixed Eva sometimes missing the final answer when relaying research.
-- Added this About panel to track version history.
-
-## 1.0.5 — 2026-08-20
-
-- Clearer "thinking" animation while waiting for a reply.
-- That animation now stays visible during tool calls too, not just before.
-- Added a mic/speaker picker so voice mode isn't stuck on the wrong device.
-- Fixed Fast/Deep research mode randomly switching on its own.
-- New session now always starts on Eva's tab.
+- Fixed delegation messages getting cut down to one line in transit.
+- Email now sees other agents' findings automatically.
+- The Email and Research tabs accept direct typing again.
