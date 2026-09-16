@@ -2,6 +2,10 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.33 — 2026-09-16
+
+- Reverted the previous version's NO_RESPONSE_NEEDED fix — it was wrong. Confirmed against a real call's word-level timing that Retell spoke the literal text "NO_RESPONSE_NEEDED" out loud as real audio instead of silently suppressing it as documented, and the automated system on the other end responded "Your call cannot be transferred" and hung up. That assumption was based on a summarized reading of Retell's docs that turned out not to hold for this integration, and it shipped to a real paid call before being verified against actual call behavior. Back to always replying to every menu turn for now.
+
 ## 1.0.32 — 2026-09-16
 
 - Fixed Eva getting the actual answer to a phone call's purpose — a town's IVR recording stated its own office hours before listing extensions — and then just hanging up without saying it, so the call's report showed "reached an automated menu, no conversation occurred" with the real answer nowhere in it. Whoever reviews a call afterward only sees what was said out loud during it, not what Eva silently understood; she now says the answer back out loud plainly (including one heard from an automated recording, not just a live person) before wrapping up, instead of moving straight to a goodbye with it never spoken.
