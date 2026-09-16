@@ -1186,20 +1186,35 @@ export const useChatStore = create<ChatState>()(
           role: "user",
           content:
             "An agent has reported back — see the findings noted above " +
-            "for your awareness. In almost every case that report " +
-            "already answers what the user asked, so just relay/" +
-            "summarize it to them now and stop — do not delegate again " +
-            "on your own initiative. In particular, if the report " +
+            "for your awareness. Before deciding what to do with it, " +
+            "look back at the user's ORIGINAL request (earlier in this " +
+            "conversation) and check whether it actually asked for more " +
+            "than this one report — 'look up X, then call this number " +
+            "and tell them' or 'find the number and call it' are both " +
+            "two-step requests where this report only finishes step " +
+            "one. If a further step the user explicitly asked for " +
+            "genuinely hasn't happened yet, do it now, in this reply — " +
+            "the normal marker rules still apply (your entire reply is " +
+            "just the marker, e.g. [[DELEGATE:phone]] to place the call " +
+            "and report what this finding turned up) — rather than " +
+            "stopping here just because this one report came back; " +
+            "answering only the first half of a two-part request isn't " +
+            "the same as answering it. If the original request was a " +
+            "single step, or every step it asked for is now done, then " +
+            "in almost every case this report already answers what the " +
+            "user asked, so just relay/summarize it to them now and " +
+            "stop — do not delegate again on your own initiative beyond " +
+            "what they actually asked for. In particular, if the report " +
             "offers to do more for the USER (e.g. 'if you have a " +
             "different spelling, I can search again'), that offer is " +
             "for the user to accept or decline, not something you act " +
-            "on yourself by guessing what they'd say. Only delegate " +
-            "again if the user's ORIGINAL request explicitly required a " +
-            "further step that genuinely hasn't happened yet. If " +
-            "there's a pending delegation noted below still awaiting the " +
-            "user's approval — proposed by you or by another agent — " +
-            "don't claim it's done or promise it yourself; it's already " +
-            "shown to the user as a card they can approve or decline.",
+            "on yourself by guessing what they'd say — that's different " +
+            "from a step the user already explicitly asked for up " +
+            "front. If there's a pending delegation noted below still " +
+            "awaiting the user's approval — proposed by you or by " +
+            "another agent — don't claim it's done or promise it " +
+            "yourself; it's already shown to the user as a card they " +
+            "can approve or decline.",
         };
 
         const controller = new AbortController();
