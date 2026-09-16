@@ -2,12 +2,12 @@
 // lib/sync-broadcast.ts, app/api/sync/*). Wraps localStorage as a zustand
 // `StateStorage` — getItem/setItem/removeItem stay a trivial passthrough
 // so today's synchronous, no-flash hydration from localStorage is
-// unchanged — while independently keeping a shared, 5-field subset of the
+// unchanged — while independently keeping a shared, 6-field subset of the
 // persisted state (sessions, seenFollowUpCallIds, phoneCalls,
-// phoneCallsFetchedAt, feedbackItems) in sync with the server. Everything
-// else persisted (activeSessionId, activeAgentId, sidebarCollapsed,
-// voiceVolume, audio device ids) is per-device UI/hardware state, not
-// shared history, and never leaves this browser.
+// phoneCallsFetchedAt, feedbackItems, seenAppVersion) in sync with the
+// server. Everything else persisted (activeSessionId, activeAgentId,
+// sidebarCollapsed, voiceVolume, audio device ids) is per-device UI/
+// hardware state, not shared history, and never leaves this browser.
 //
 // Doesn't import useChatStore directly (lib/store.ts imports THIS module
 // for its `storage` option, so importing back would be circular) —
@@ -30,6 +30,7 @@ export interface SyncedFields {
   phoneCalls: CallSummary[] | null;
   phoneCallsFetchedAt: number | null;
   feedbackItems: FeedbackItem[];
+  seenAppVersion: string | null;
 }
 
 interface PersistEnvelope {
@@ -101,6 +102,7 @@ function extractSyncedFields(state: Record<string, unknown>): SyncedFields {
     phoneCalls: (state.phoneCalls as CallSummary[] | null) ?? null,
     phoneCallsFetchedAt: (state.phoneCallsFetchedAt as number | null) ?? null,
     feedbackItems: Array.isArray(state.feedbackItems) ? (state.feedbackItems as FeedbackItem[]) : [],
+    seenAppVersion: (state.seenAppVersion as string | null) ?? null,
   };
 }
 
@@ -241,6 +243,30 @@ function mergeFeedbackItems(local: FeedbackItem[], remote: FeedbackItem[]): Feed
   return order.map((id) => byId.get(id)!).sort((a, b) => b.createdAt - a.createdAt);
 }
 
+// Dotted-numeric compare (package.json's "1.0.27" shape) — falls back to
+// string equality for anything that doesn't parse cleanly, which just
+// means mergeSeenAppVersion below keeps whichever side it already had
+// rather than guessing.
+function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  if (pa.some(Number.isNaN) || pb.some(Number.isNaN)) return 0;
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+// "Seen" should mean seen as of the newest version either device actually
+// acknowledged — same sticky-forward reasoning as mergeFeedbackItems'
+// resolved flag, just for a version string instead of a boolean.
+function mergeSeenAppVersion(a: string | null, b: string | null): string | null {
+  if (!a) return b;
+  if (!b) return a;
+  return compareVersions(a, b) >= 0 ? a : b;
+}
+
 // excludeIds is only ever passed on the 409-retry merge path (see
 // pushToServer) — this is steady-state sync between two already-shared
 // devices, not the one-time reset in runInitialSync (which discards a
@@ -254,6 +280,7 @@ function mergeSyncedFields(local: SyncedFields, remote: SyncedFields, excludeIds
     phoneCalls: remoteFetched > localFetched ? remote.phoneCalls : local.phoneCalls,
     phoneCallsFetchedAt: Math.max(localFetched, remoteFetched) || null,
     feedbackItems: mergeFeedbackItems(local.feedbackItems, remote.feedbackItems),
+    seenAppVersion: mergeSeenAppVersion(local.seenAppVersion, remote.seenAppVersion),
   };
 }
 
@@ -420,6 +447,7 @@ const EMPTY_SYNCED_FIELDS: SyncedFields = {
   phoneCalls: null,
   phoneCallsFetchedAt: null,
   feedbackItems: [],
+  seenAppVersion: null,
 };
 
 function runInitialSync(): Promise<void> {

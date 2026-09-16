@@ -2,6 +2,10 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.29 — 2026-09-16
+
+- Added a red dot on the About button when a new version has shipped that you haven't seen yet — same badge style the Feedback tab already uses. Clears the moment you open About; syncs across devices like an unread call notice does, so dismissing it on one device clears it everywhere.
+
 ## 1.0.28 — 2026-09-16
 
 - Fixed Eva narrating phone actions that never actually happened: "I'll press one for Jennifer" and "I'm ending the call now" were just spoken words over the line — nothing told Retell to actually press a button or hang up. A call that hit a looping phone menu had no way to escape it and no way to stop itself, and one real call ran close to an hour before Retell's own 1-hour default cutoff finally ended it. Eva can now actually press a button and actually hang up; every outbound call also gets a hard 6-minute cap enforced by Retell itself regardless of anything else going wrong, and a call that repeats the identical line 3 times now force-ends automatically, independent of what Eva decides.

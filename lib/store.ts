@@ -312,6 +312,17 @@ interface ChatState {
   // read state survives a reload instead of every follow-up reappearing
   // as unread.
   seenFollowUpCallIds: string[];
+  // Version string from /api/about — fetched once per app load (see
+  // fetchLatestAppVersion) purely to drive the About button's "new
+  // version" badge in the Sidebar; the About modal itself does its own
+  // independent fetch for the full changelog. Never persisted — always
+  // re-checked fresh, same reasoning as phoneCallsLoading below.
+  latestAppVersion: string | null;
+  // Version last actually seen in the About modal — persisted and synced
+  // (same reasoning as seenFollowUpCallIds: dismissing this on one device
+  // should clear the badge everywhere). The badge shows whenever
+  // latestAppVersion differs from this.
+  seenAppVersion: string | null;
   // 0 (silent) to 1 (full) — controls playback volume for Eva's spoken
   // replies in VoiceSession. Persisted like other UI preferences below.
   voiceVolume: number;
@@ -398,6 +409,10 @@ interface ChatState {
   // a partial failure just silently keeps the failed ones in the list.
   deletePhoneCalls: (callIds: string[]) => Promise<void>;
   markFollowUpsSeen: (callIds: string[]) => void;
+  // A no-op if already loaded — same "call it on mount, don't think about
+  // it" contract as fetchPhoneCalls above.
+  fetchLatestAppVersion: () => Promise<void>;
+  markAppVersionSeen: (version: string) => void;
   toggleSidebar: () => void;
   setMobileSidebarOpen: (open: boolean) => void;
   setVoiceVolume: (volume: number) => void;
@@ -1482,6 +1497,8 @@ export const useChatStore = create<ChatState>()(
         phoneCallsLoading: false,
         phoneCallsError: null,
         seenFollowUpCallIds: [],
+        latestAppVersion: null,
+        seenAppVersion: null,
         feedbackItems: [],
         voiceVolume: 1,
         researchFastMode: true,
@@ -1656,6 +1673,21 @@ export const useChatStore = create<ChatState>()(
 
         markFollowUpsSeen: (callIds) =>
           set((s) => ({ seenFollowUpCallIds: Array.from(new Set([...s.seenFollowUpCallIds, ...callIds])) })),
+
+        fetchLatestAppVersion: async () => {
+          if (get().latestAppVersion) return; // already loaded this session
+          try {
+            const res = await fetch("/api/about");
+            if (!res.ok) return;
+            const data: { version?: string } = await res.json();
+            if (data.version) set({ latestAppVersion: data.version });
+          } catch {
+            // Silent — this only drives a badge, not something worth
+            // surfacing an error for.
+          }
+        },
+
+        markAppVersionSeen: (version) => set({ seenAppVersion: version }),
 
         // Cancels whatever request is currently in flight — including a
         // delegated hand-off, since only one streamChatCompletion call is
@@ -2149,6 +2181,7 @@ export const useChatStore = create<ChatState>()(
         phoneCalls: state.phoneCalls,
         phoneCallsFetchedAt: state.phoneCallsFetchedAt,
         seenFollowUpCallIds: state.seenFollowUpCallIds,
+        seenAppVersion: state.seenAppVersion,
         feedbackItems: state.feedbackItems,
       }),
       // A browser that persisted activeAgentId before Case File was

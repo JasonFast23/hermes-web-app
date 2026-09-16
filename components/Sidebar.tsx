@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AGENTS, ENABLED_AGENT_IDS } from "@/lib/agents";
 import { ChatSession, sessionRecency, useChatStore } from "@/lib/store";
 import { AboutModal } from "./AboutModal";
@@ -103,6 +103,9 @@ function CollapsedRail({
   onOpenAbout: () => void;
 }) {
   const openFeedbackCount = useChatStore((s) => s.feedbackItems.filter((f) => !f.resolved).length);
+  const latestAppVersion = useChatStore((s) => s.latestAppVersion);
+  const seenAppVersion = useChatStore((s) => s.seenAppVersion);
+  const hasNewVersion = latestAppVersion !== null && latestAppVersion !== seenAppVersion;
 
   return (
     <div className="flex h-full w-14 flex-col items-center py-3">
@@ -161,12 +164,15 @@ function CollapsedRail({
       </button>
       <button
         type="button"
-        aria-label="About"
+        aria-label={hasNewVersion ? "About (new version available)" : "About"}
         title="About"
         onClick={onOpenAbout}
-        className="mt-auto flex h-9 w-9 items-center justify-center rounded-md text-zinc-400 hover:bg-black/[0.05] hover:text-zinc-600"
+        className="relative mt-auto flex h-9 w-9 items-center justify-center rounded-md text-zinc-400 hover:bg-black/[0.05] hover:text-zinc-600"
       >
         <InfoIcon className="h-[18px] w-[18px]" />
+        {hasNewVersion && (
+          <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-red-500" />
+        )}
       </button>
     </div>
   );
@@ -199,6 +205,9 @@ function SidebarPanel({
   const busyAgentId =
     activeDelegation && activeDelegation.sessionId === activeSessionId ? activeDelegation.targetAgentId : null;
   const openFeedbackCount = useChatStore((s) => s.feedbackItems.filter((f) => !f.resolved).length);
+  const latestAppVersion = useChatStore((s) => s.latestAppVersion);
+  const seenAppVersion = useChatStore((s) => s.seenAppVersion);
+  const hasNewVersion = latestAppVersion !== null && latestAppVersion !== seenAppVersion;
 
   return (
     <div className="flex h-full w-[260px] shrink-0 flex-col">
@@ -334,6 +343,9 @@ function SidebarPanel({
         >
           <InfoIcon className="h-[16px] w-[16px] shrink-0" />
           <span>About</span>
+          {hasNewVersion && (
+            <span className="ml-auto flex h-2 w-2 shrink-0 rounded-full bg-red-500" title="New version available" />
+          )}
         </button>
       </div>
     </div>
@@ -348,7 +360,16 @@ export function Sidebar() {
   const setView = useChatStore((s) => s.setView);
   const mobileOpen = useChatStore((s) => s.mobileSidebarOpen);
   const setMobileOpen = useChatStore((s) => s.setMobileSidebarOpen);
+  const fetchLatestAppVersion = useChatStore((s) => s.fetchLatestAppVersion);
   const [aboutOpen, setAboutOpen] = useState(false);
+
+  // Sidebar is mounted exactly once (desktop rail + mobile drawer share this
+  // one component instance), so this is the natural single place to kick
+  // off the one-time version check that drives the About button's badge —
+  // same "call it on mount" contract as fetchPhoneCalls in NotificationBell.
+  useEffect(() => {
+    fetchLatestAppVersion();
+  }, [fetchLatestAppVersion]);
 
   return (
     <>

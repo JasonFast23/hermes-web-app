@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { XIcon } from "./Icons";
+import { useChatStore } from "@/lib/store";
 
 interface VersionSection {
   title: string;
@@ -39,6 +40,7 @@ export function AboutModal({ onClose }: { onClose: () => void }) {
   const [version, setVersion] = useState<string | null>(null);
   const [sections, setSections] = useState<VersionSection[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const markAppVersionSeen = useChatStore((s) => s.markAppVersionSeen);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,6 +50,10 @@ export function AboutModal({ onClose }: { onClose: () => void }) {
         if (cancelled) return;
         setVersion(data.version);
         setSections(parseChangelog(data.changelog));
+        // Opening this modal and actually seeing the version IS "seen" —
+        // clears the Sidebar's About badge (see hasNewVersion there), and
+        // syncs across devices the same way a read call notice does.
+        markAppVersionSeen(data.version);
       })
       .catch(() => {
         if (!cancelled) setError("Couldn't load the changelog.");
@@ -55,7 +61,7 @@ export function AboutModal({ onClose }: { onClose: () => void }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [markAppVersionSeen]);
 
   return (
     <div

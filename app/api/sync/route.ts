@@ -20,7 +20,8 @@ function isSyncedState(value: unknown): value is SyncedState {
     Array.isArray(v.sessions) &&
     Array.isArray(v.seenFollowUpCallIds) &&
     (v.phoneCallsFetchedAt === null || typeof v.phoneCallsFetchedAt === "number") &&
-    Array.isArray(v.feedbackItems)
+    Array.isArray(v.feedbackItems) &&
+    (v.seenAppVersion === undefined || v.seenAppVersion === null || typeof v.seenAppVersion === "string")
   );
 }
 
