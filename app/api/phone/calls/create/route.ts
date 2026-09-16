@@ -3,9 +3,19 @@ import { NextRequest, NextResponse } from "next/server";
 export const runtime = "nodejs";
 
 // Real outbound call — dials a number, live, over the telephone network.
-// Eva no longer has any path to trigger this (delegate-to-phone was
-// removed; see lib/agents.ts and lib/store.ts) — this endpoint is
-// currently unused, kept for a future manual dialer in the Phone tab.
+// This is what runPhoneBatch (lib/store.ts) hits for every [[DELEGATE:
+// phone]] call Eva places.
+
+// Hard ceiling Retell force-ends the call at, no matter what happens on
+// either end — the backstop of last resort, independent of whether Eva's
+// own [[HANGUP]] marker or the phone bridge's IVR-loop circuit breaker
+// (hermes-phone-bridge/server.js) are working. Retell's own default here
+// is 3,600,000ms (1 hour) — exactly the runaway duration that produced a
+// real ~$5-6 overcharge on a call stuck repeating an IVR menu forever
+// (see CHANGELOG). A few minutes past this app's own PHONE_BATCH_CALL_
+// TIMEOUT_MS (5 min, lib/store.ts) so a call that's actually gotten a real
+// person on the line still has room to finish before Retell cuts it off.
+const MAX_CALL_DURATION_MS = 6 * 60 * 1000;
 
 // US numbers only (this whole feature is one Retell US number). Accepts
 // whatever loose format the model or a person typed — a formatted
@@ -62,7 +72,11 @@ export async function POST(req: NextRequest) {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ from_number: fromNumber, to_number: toNumber }),
+      body: JSON.stringify({
+        from_number: fromNumber,
+        to_number: toNumber,
+        agent_override: { agent: { max_call_duration_ms: MAX_CALL_DURATION_MS } },
+      }),
     });
   } catch {
     return NextResponse.json({ error: "Unable to reach Retell API" }, { status: 502 });
