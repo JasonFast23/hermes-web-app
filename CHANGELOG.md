@@ -2,6 +2,15 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.28 — 2026-09-16
+
+- Fixed Eva narrating phone actions that never actually happened: "I'll press one for Jennifer" and "I'm ending the call now" were just spoken words over the line — nothing told Retell to actually press a button or hang up. A call that hit a looping phone menu had no way to escape it and no way to stop itself, and one real call ran close to an hour before Retell's own 1-hour default cutoff finally ended it. Eva can now actually press a button and actually hang up; every outbound call also gets a hard 6-minute cap enforced by Retell itself regardless of anything else going wrong, and a call that repeats the identical line 3 times now force-ends automatically, independent of what Eva decides.
+- Fixed Eva giving up on an automated menu without ever trying an option — she'd hear a full list of departments once and bail instead of picking whichever one best matched what she was calling about. She now picks the closest match (front desk/main office for a general question, the specific department for a role-specific one) and presses it immediately, and no longer treats hearing a menu once as proof it's stuck.
+
+## 1.0.27 — 2026-09-16
+
+- Fixed a file attached to a message to Eva (a spreadsheet, PDF) disappearing before she or a delegated agent ever saw it — a routine cross-device sync merge, which runs on every page load and every live update, silently dropped a session's attached files instead of carrying them through. This is why Email kept reporting it only saw an old, previously-attached file no matter how many times a new one was attached.
+
 ## 1.0.26 — 2026-09-15
 
 - Fixed a chat tab forcing you back to the bottom while you were scrolled up reading something (e.g. clicking a Research report's source links) if that thread had any activity still happening in it — every new tool-progress update or message yanked the view back down mid-read. Auto-scroll now only follows along if you were already near the bottom; scrolling up to reread something now actually stays where you put it.
