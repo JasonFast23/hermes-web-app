@@ -13,6 +13,12 @@ function greetingForHour(hour: number): string {
   return "Good Evening";
 }
 
+// Within this many pixels of the bottom still counts as "at the bottom" —
+// forgiving enough that a smooth-scroll animation settling a few pixels
+// short, or a trackpad's inertial overshoot, doesn't get misread as the
+// user having deliberately scrolled away.
+const NEAR_BOTTOM_PX = 80;
+
 export function ChatPanel() {
   const sessions = useChatStore((s) => s.sessions);
   const activeAgentId = useChatStore((s) => s.activeAgentId);
@@ -21,11 +27,21 @@ export function ChatPanel() {
   const scrollToMessage = useChatStore((s) => s.scrollToMessage);
   const isStreaming = useChatStore((s) => s.isStreaming);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // A ref, not state — read inside the auto-scroll effect below, but
+  // updating it should never itself trigger a re-render/scroll.
+  const isNearBottomRef = useRef(true);
 
   const messages = useMemo(
     () => sessions.find((s) => s.id === activeSessionId)?.threads[activeAgentId] ?? [],
     [sessions, activeSessionId, activeAgentId]
   );
+
+  const handleScroll = () => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+  };
 
   // A search-result navigation scrolls to the specific matched message.
   useEffect(() => {
@@ -35,17 +51,34 @@ export function ChatPanel() {
       ?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [scrollToMessage, messages]);
 
-  // Scroll to the bottom on new messages or switching threads. Deliberately
-  // depends on `messages` ONLY — not scrollToMessage — even though it reads
-  // scrollToMessage's value: MessageBubble clears scrollToMessage itself
-  // once its highlight fade completes (see its own comment for why), and
-  // that clear must NOT be a trigger for this effect, or every search
-  // highlight would yank the view down to the bottom a couple seconds
-  // after landing on it. Including scrollToMessage in the deps array would
-  // do exactly that — re-run this effect on the clear, at which point the
-  // guard below is already false and it falls through to the bottom-scroll.
+  // A new thread (session or tab switch) always opens scrolled to the
+  // bottom, same as opening any normal chat app — this is what "switching
+  // threads" is expected to do, independent of whatever scroll position
+  // was left over from whatever the user was previously reading.
+  useEffect(() => {
+    isNearBottomRef.current = true;
+  }, [activeSessionId, activeAgentId]);
+
+  // Scroll to the bottom on new messages — but only if the user was
+  // already sitting near the bottom (i.e. actually following along), not
+  // after they've deliberately scrolled up to reread something (e.g. an
+  // older Research report's source links) while a background task keeps
+  // appending tool-progress updates to the SAME thread underneath them.
+  // Previously this fired unconditionally on every new message, which made
+  // it impossible to scroll up and click a link in a thread that had any
+  // activity still happening in it — every update yanked the view back
+  // down mid-read. Deliberately depends on `messages` ONLY — not
+  // scrollToMessage — even though it reads scrollToMessage's value:
+  // MessageBubble clears scrollToMessage itself once its highlight fade
+  // completes (see its own comment for why), and that clear must NOT be a
+  // trigger for this effect, or every search highlight would yank the view
+  // down to the bottom a couple seconds after landing on it. Including
+  // scrollToMessage in the deps array would do exactly that — re-run this
+  // effect on the clear, at which point the guard below is already false
+  // and it falls through to the bottom-scroll.
   useEffect(() => {
     if (scrollToMessage) return;
+    if (!isNearBottomRef.current) return;
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages]);
@@ -71,7 +104,11 @@ export function ChatPanel() {
 
         </div>
       ) : (
-        <div className="relative flex-1 space-y-3 overflow-x-hidden overflow-y-auto p-4">
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleScroll}
+          className="relative flex-1 space-y-3 overflow-x-hidden overflow-y-auto p-4"
+        >
           {messages.map((message, i) => {
             // A delegate-marker message ends up with empty content once the
             // marker is stripped out (see processDelegateMarker) — nothing
