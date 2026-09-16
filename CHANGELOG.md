@@ -2,6 +2,10 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.31 — 2026-09-16
+
+- Found the actual cause of Eva claiming an office's phone menu "repeated itself" when it hadn't: pulled the real call recording's timing data and confirmed the automated menu played once, straight through, for 34 uninterrupted seconds — but a brief pause partway through it (after "Thank you for calling ") was read as her turn, so she started replying and got cut off when the menu kept going. From inside her own conversation, that looked like hearing the same announcement twice, since she'd generated two separate replies to two pieces of one uninterrupted recording. Eva now recognizes an unfinished-sounding fragment and stays silent for it (using Retell's own NO_RESPONSE_NEEDED signal) instead of jumping in, so she hears the whole menu before deciding anything.
+
 ## 1.0.30 — 2026-09-16
 
 - Fixed Eva still giving up on an office's phone menu without pressing anything, even after the previous fix told her to pick and press the closest option — she heard a real, valid menu exactly once and hung up anyway. Confirmed via the actual call log this wasn't a bug in pressing/hanging up itself (that machinery worked correctly) — she just didn't follow her own instructions. Rather than trust more prompt wording alone, the phone bridge now tracks whether she's pressed anything yet on a call and, until she has, adds a pointed reminder to every reply that she is not allowed to give up before making at least one attempt — a live person answering or genuine dead air still work normally.
