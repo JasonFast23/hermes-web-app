@@ -2,6 +2,10 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.32 — 2026-09-16
+
+- Fixed Eva getting the actual answer to a phone call's purpose — a town's IVR recording stated its own office hours before listing extensions — and then just hanging up without saying it, so the call's report showed "reached an automated menu, no conversation occurred" with the real answer nowhere in it. Whoever reviews a call afterward only sees what was said out loud during it, not what Eva silently understood; she now says the answer back out loud plainly (including one heard from an automated recording, not just a live person) before wrapping up, instead of moving straight to a goodbye with it never spoken.
+
 ## 1.0.31 — 2026-09-16
 
 - Found the actual cause of Eva claiming an office's phone menu "repeated itself" when it hadn't: pulled the real call recording's timing data and confirmed the automated menu played once, straight through, for 34 uninterrupted seconds — but a brief pause partway through it (after "Thank you for calling ") was read as her turn, so she started replying and got cut off when the menu kept going. From inside her own conversation, that looked like hearing the same announcement twice, since she'd generated two separate replies to two pieces of one uninterrupted recording. Eva now recognizes an unfinished-sounding fragment and stays silent for it (using Retell's own NO_RESPONSE_NEEDED signal) instead of jumping in, so she hears the whole menu before deciding anything.
