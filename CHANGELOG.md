@@ -2,6 +2,10 @@
 
 What actually shipped, one entry per version.
 
+## 1.0.30 — 2026-09-16
+
+- Fixed Eva still giving up on an office's phone menu without pressing anything, even after the previous fix told her to pick and press the closest option — she heard a real, valid menu exactly once and hung up anyway. Confirmed via the actual call log this wasn't a bug in pressing/hanging up itself (that machinery worked correctly) — she just didn't follow her own instructions. Rather than trust more prompt wording alone, the phone bridge now tracks whether she's pressed anything yet on a call and, until she has, adds a pointed reminder to every reply that she is not allowed to give up before making at least one attempt — a live person answering or genuine dead air still work normally.
+
 ## 1.0.29 — 2026-09-16
 
 - Added a red dot on the About button when a new version has shipped that you haven't seen yet — same badge style the Feedback tab already uses. Clears the moment you open About; syncs across devices like an unread call notice does, so dismissing it on one device clears it everywhere.
